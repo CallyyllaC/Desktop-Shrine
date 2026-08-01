@@ -67,6 +67,19 @@ complete hardware telemetry), plus optional installation of legacy GOverlay
 [`docs/installation.md`](docs/installation.md) for the complete dependency and
 build requirements.
 
+### GOverlay setup
+
+After installing GOverlay and the Desktop Shrine bridge:
+
+1. Open GOverlay and enable the Desktop Shrine plugin.
+2. Create a new GOverlay profile for Desktop Shrine.
+3. Add the Desktop Shrine plugin to the new profile.
+4. Upload the bundled `Oxanium-Bold_20px.bin` font to GOverlay.
+5. Select the new profile and start Desktop Shrine.
+
+The GOverlay output should then be available to display media, game, and
+hardware information published by Desktop Shrine.
+
 ## Configuration
 
 Each plugin has a flat JSON configuration file:
