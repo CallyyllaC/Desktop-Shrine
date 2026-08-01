@@ -4,8 +4,8 @@
 #ifndef PublishRoot
   #error PublishRoot must be supplied by Build-WindowsInstaller.ps1
 #endif
-#ifndef GOverlayMsi
-  #error GOverlayMsi must be supplied by Build-WindowsInstaller.ps1
+#ifndef RepositoryRoot
+  #error RepositoryRoot must be supplied by Build-WindowsInstaller.ps1
 #endif
 #ifndef InstallerOutput
   #error InstallerOutput must be supplied by Build-WindowsInstaller.ps1
@@ -14,6 +14,8 @@
 #define MyAppName "Desktop Shrine"
 #define MyAppExeName "DesktopShrine.Host.exe"
 #define StartupTaskName "Desktop Shrine"
+#define GOverlayMsiUri "https://www.goverlay.com/downloads/lcdsysinfo/GOverlaySetup.msi"
+#define GOverlayMsiSha256 "7F0B3EBF8422D4D68402B3789944EC8CB9D401E3756751FEEB2AC3AB48F3B5E4"
 
 [Setup]
 AppId={{17BCE957-E0DB-4725-A31B-A18F8D9DD7FC}
@@ -44,11 +46,13 @@ VersionInfoProductVersion={#MyAppVersion}
 [Tasks]
 Name: "startup"; Description: "Start Desktop Shrine when I sign in to Windows"; GroupDescription: "Startup options:"; Flags: checkedonce
 Name: "runasadmin"; Description: "Run Desktop Shrine as administrator (recommended - hardware status can be incomplete in user mode)"; GroupDescription: "Startup options:"; Flags: checkedonce
-Name: "goverlay"; Description: "Install or update legacy GOverlay (1.6.9) and its Desktop Shrine bridge"; GroupDescription: "Optional hardware software:"; Flags: unchecked
+Name: "goverlay"; Description: "Download and install legacy GOverlay 1.6.9 from the official website"; GroupDescription: "Optional hardware software:"; Flags: unchecked
 
 [Files]
 Source: "{#PublishRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#GOverlayMsi}"; DestDir: "{tmp}"; DestName: "GOverlaySetup.msi"; Flags: deleteafterinstall; Tasks: goverlay
+Source: "{#RepositoryRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepositoryRoot}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepositoryRoot}\third-party-licenses\Oxanium-OFL-1.1.txt"; DestDir: "{app}\licenses\third-party-licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Desktop Shrine"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--launch"; WorkingDir: "{app}"
@@ -110,6 +114,13 @@ begin
     FileExists(GetGOverlayDirectory('') + '\Interfaces.dll');
 end;
 
+function OnGOverlayDownloadProgress(
+  const Url, FileName: String;
+  const Progress, ProgressMax: Int64): Boolean;
+begin
+  Result := True;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   RunKey: String;
@@ -128,6 +139,24 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
 begin
+  Result := '';
+  if IsTaskSelected('goverlay') then
+  begin
+    try
+      Log('Downloading the official legacy GOverlay installer...');
+      DownloadTemporaryFile(
+        '{#GOverlayMsiUri}',
+        'GOverlaySetup.msi',
+        '{#GOverlayMsiSha256}',
+        @OnGOverlayDownloadProgress);
+    except
+      Result :=
+        'The official legacy GOverlay installer could not be downloaded or ' +
+        'verified.' + #13#10 + GetExceptionMessage;
+      exit;
+    end;
+  end;
+
   Exec(
     ExpandConstant('{sys}\taskkill.exe'),
     '/IM {#MyAppExeName} /F',
@@ -135,7 +164,6 @@ begin
     SW_HIDE,
     ewWaitUntilTerminated,
     ResultCode);
-  Result := '';
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -18,15 +18,9 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $artifactsRoot = Join-Path $repositoryRoot 'artifacts\installer'
 $publishRoot = Join-Path $artifactsRoot "publish-$RuntimeIdentifier"
 $pluginBuildRoot = Join-Path $artifactsRoot 'plugin-build'
-$dependencyRoot = Join-Path $artifactsRoot 'dependencies'
 $outputRoot = Join-Path $artifactsRoot 'output'
 $solutionPath = Join-Path $repositoryRoot 'DesktopShrine.slnx'
 $innoScript = Join-Path $repositoryRoot 'installer\DesktopShrine.iss'
-$goverlayMsi = Join-Path $dependencyRoot 'GOverlaySetup.msi'
-$goverlayMsiUri =
-    'https://www.goverlay.com/downloads/lcdsysinfo/GOverlaySetup.msi'
-$goverlayMsiSha256 =
-    '7F0B3EBF8422D4D68402B3789944EC8CB9D401E3756751FEEB2AC3AB48F3B5E4'
 
 function Invoke-DotNet {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -120,25 +114,6 @@ function Copy-PluginPublish {
         -Force
 }
 
-function Get-VerifiedGOverlayInstaller {
-    New-Item -ItemType Directory -Path $dependencyRoot -Force | Out-Null
-    if (Test-Path -LiteralPath $goverlayMsi) {
-        $existingHash = (Get-FileHash -LiteralPath $goverlayMsi -Algorithm SHA256).Hash
-        if ($existingHash -eq $goverlayMsiSha256) {
-            return
-        }
-        Remove-Item -LiteralPath $goverlayMsi -Force
-    }
-
-    Write-Host 'Downloading the official GOverlay installer...'
-    Invoke-WebRequest -Uri $goverlayMsiUri -OutFile $goverlayMsi
-    $downloadedHash = (Get-FileHash -LiteralPath $goverlayMsi -Algorithm SHA256).Hash
-    if ($downloadedHash -ne $goverlayMsiSha256) {
-        Remove-Item -LiteralPath $goverlayMsi -Force
-        throw "The GOverlay installer checksum was $downloadedHash; expected $goverlayMsiSha256. The upstream file may have changed and must be reviewed before packaging."
-    }
-}
-
 Assert-Toolchain
 $innoCompiler = Resolve-InnoCompiler
 Reset-Directory $publishRoot
@@ -222,12 +197,10 @@ Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $legacyProject) 'Deploy-GO
     -Destination $integrationDestination `
     -Force
 
-Get-VerifiedGOverlayInstaller
-
 & $innoCompiler `
     "/DMyAppVersion=$Version" `
     "/DPublishRoot=$publishRoot" `
-    "/DGOverlayMsi=$goverlayMsi" `
+    "/DRepositoryRoot=$repositoryRoot" `
     "/DInstallerOutput=$outputRoot" `
     $innoScript
 if ($LASTEXITCODE -ne 0) {
@@ -239,5 +212,14 @@ if (-not (Test-Path -LiteralPath $installerPath)) {
     throw "The expected installer was not created at $installerPath."
 }
 
+$installerHash = Get-FileHash -LiteralPath $installerPath -Algorithm SHA256
+$hashPath = "$installerPath.sha256"
+$hashLine = "$($installerHash.Hash.ToLowerInvariant()) *$([IO.Path]::GetFileName($installerPath))"
+[IO.File]::WriteAllText(
+    $hashPath,
+    $hashLine + [Environment]::NewLine,
+    [Text.UTF8Encoding]::new($false))
+
 Write-Host ''
 Write-Host "Installer created: $installerPath"
+Write-Host "SHA-256 file created: $hashPath"

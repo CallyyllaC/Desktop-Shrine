@@ -62,10 +62,10 @@ desktop session, exclude the development Console Display plugin, and do not
 require users to install the .NET 10 runtime separately.
 
 Setup offers startup with Windows and administrator mode (recommended for
-complete hardware telemetry), plus optional installation of legacy GOverlay
-1.6.9 and the Desktop Shrine bridge. See
-[`docs/installation.md`](docs/installation.md) for the complete dependency and
-build requirements.
+complete hardware telemetry), plus the option to download and launch the
+official legacy GOverlay 1.6.9 installer and install the Desktop Shrine bridge.
+See [`docs/installation.md`](docs/installation.md) for the complete dependency
+and build requirements.
 
 ### GOverlay setup
 
@@ -152,3 +152,9 @@ The host discovers:
 Sample deployment manifests live alongside the sample projects.
 
 The architecture follows a ports-and-adapters approach: plugins communicate through shared contracts, while device-specific or platform-specific code remains at the edges of the system.
+
+## Licence
+
+Desktop Shrine is licensed under the [MIT License](LICENSE). Third-party
+components and assets retain their respective licences; see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for details.

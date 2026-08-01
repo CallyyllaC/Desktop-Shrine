@@ -14,8 +14,9 @@ reliably use those user-session APIs.
 - BlinkStick does not need separate BlinkStick software. Desktop Shrine talks
   to it as a Windows HID device through the bundled HidSharp package.
 - Legacy GOverlay LCDSysInfo hardware needs the official GOverlay software and
-  the Desktop Shrine bridge plugin. Setup offers GOverlay 1.6.9 as an optional
-  component and deploys the bridge after GOverlay is present.
+  the Desktop Shrine bridge plugin. Setup can optionally download and launch
+  the official legacy GOverlay 1.6.9 installer, then deploys the bridge after
+  GOverlay is present.
 - GOverlay uses the Windows .NET Framework 4.x runtime. Supported Windows 10
   and Windows 11 installations already include a compatible 4.x runtime; this
   is unrelated to the self-contained .NET 10 runtime used by Desktop Shrine.
@@ -49,6 +50,27 @@ Application binaries and plugins are installed beneath Program Files. Removing
 Desktop Shrine removes its GOverlay bridge but deliberately leaves the official
 GOverlay application installed, since it may be used independently.
 
+## Legacy GOverlay compatibility and preservation
+
+Desktop Shrine can optionally download the legacy GOverlay installer directly
+from the official GOverlay website. This option is provided solely for
+compatibility with discontinued GOverlay display hardware.
+
+GOverlay is third-party software and is not included in the Desktop Shrine
+distribution. Desktop Shrine does not host, modify, or redistribute the
+GOverlay installer. Availability depends on the official GOverlay download
+remaining accessible.
+
+All GOverlay names, software, trademarks, and associated rights remain the
+property of their respective owner. No ownership, endorsement, or affiliation
+is claimed.
+
+The Desktop Shrine GOverlay bridge and plugin are separate integration
+components developed as part of this repository under the project's MIT
+licence. They allow Desktop Shrine to communicate with the third-party
+GOverlay application; they are not the GOverlay application or installer. See
+the complete [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md).
+
 ## Building the installer
 
 Run:
@@ -63,17 +85,19 @@ The build machine needs:
 - Inno Setup 6 (the batch file offers to install it with `winget` when absent);
 - an existing legacy GOverlay installation containing `Interfaces.dll`, used
   only to compile the bridge against the official SDK;
-- internet access for the first NuGet restore and the checksummed official
-  GOverlay installer download.
+- internet access for the first NuGet restore.
 
 The script runs the Release test suite, publishes a self-contained `win-x64`
 host, publishes all production plugins except Console Display, builds the
-legacy GOverlay bridge, verifies the official GOverlay MSI SHA-256 checksum,
-and compiles the final installer into:
+legacy GOverlay bridge, and compiles the final installer into:
 
 ```text
 artifacts\installer\output
 ```
+
+The output directory contains the setup executable and a matching
+`.exe.sha256` file. The hash file records the setup executable's SHA-256 digest
+for release verification.
 
 The generated setup executable is unsigned unless a code-signing step is added
 for your certificate. Windows may therefore show an Unknown publisher or
