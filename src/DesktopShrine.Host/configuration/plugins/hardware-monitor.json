@@ -1,0 +1,5 @@
+{
+  "PollIntervalMilliseconds": 1000,
+  "LogEverySample": false,
+  "LogSensorInventory": false
+}

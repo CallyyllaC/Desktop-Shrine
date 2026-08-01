@@ -1,0 +1,113 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <WindowsPluginTargetFramework>net10.0-windows10.0.19041.0</WindowsPluginTargetFramework>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DesktopShrine.Runtime/DesktopShrine.Runtime.csproj"/>
+    <ProjectReference Include="../DesktopShrine.Abstractions/DesktopShrine.Abstractions.csproj"/>
+    <FrameworkReference Include="Microsoft.AspNetCore.App"/>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest"/>
+    <None Update="configuration/plugins/*.json"
+          CopyToOutputDirectory="PreserveNewest"/>
+  </ItemGroup>
+
+  <Target Name="StageDevelopmentPlugins"
+          AfterTargets="Build"
+          Condition="'$(Configuration)' == 'Debug' and '$(StageDevelopmentPlugins)' != 'false'">
+    <MSBuild Projects="../../contracts/DesktopShrine.Contracts.Audio/DesktopShrine.Contracts.Audio.csproj;
+                       ../../contracts/DesktopShrine.Contracts.Hardware/DesktopShrine.Contracts.Hardware.csproj;
+                       ../../contracts/DesktopShrine.Contracts.Media/DesktopShrine.Contracts.Media.csproj;
+                       ../../samples/DesktopShrine.Plugin.HardwareMonitor/DesktopShrine.Plugin.HardwareMonitor.csproj;
+                       ../../samples/DesktopShrine.Plugin.AudioCollector/DesktopShrine.Plugin.AudioCollector.csproj;
+                       ../../samples/DesktopShrine.Plugin.WindowsNowPlaying/DesktopShrine.Plugin.WindowsNowPlaying.csproj;
+                       ../../samples/DesktopShrine.Plugin.SteamNowPlaying/DesktopShrine.Plugin.SteamNowPlaying.csproj;
+                       ../../samples/DesktopShrine.Plugin.ArtworkPalette/DesktopShrine.Plugin.ArtworkPalette.csproj;
+                       ../../samples/DesktopShrine.Plugin.BlinkStickBar/DesktopShrine.Plugin.BlinkStickBar.csproj;
+                       ../../samples/DesktopShrine.Plugin.GOverlay/DesktopShrine.Plugin.GOverlay.csproj;
+                       ../../samples/DesktopShrine.Plugin.ConsoleDisplay/DesktopShrine.Plugin.ConsoleDisplay.csproj"
+             Targets="Build"
+             Properties="Configuration=$(Configuration)"
+             RemoveProperties="OutDir;OutputPath;TargetFramework"
+             BuildInParallel="true"/>
+
+    <ItemGroup>
+      <DevelopmentContract Include="../../contracts/DesktopShrine.Contracts.Audio/bin/$(Configuration)/net10.0/DesktopShrine.Contracts.Audio.*;
+                                    ../../contracts/DesktopShrine.Contracts.Hardware/bin/$(Configuration)/net10.0/DesktopShrine.Contracts.Hardware.*;
+                                    ../../contracts/DesktopShrine.Contracts.Media/bin/$(Configuration)/net10.0/DesktopShrine.Contracts.Media.*"/>
+      <HardwareMonitorFile Include="../../samples/DesktopShrine.Plugin.HardwareMonitor/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <AudioCollectorFile Include="../../samples/DesktopShrine.Plugin.AudioCollector/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <WindowsNowPlayingFile Include="../../samples/DesktopShrine.Plugin.WindowsNowPlaying/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <SteamNowPlayingFile Include="../../samples/DesktopShrine.Plugin.SteamNowPlaying/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <ArtworkPaletteFile Include="../../samples/DesktopShrine.Plugin.ArtworkPalette/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <BlinkStickBarFile Include="../../samples/DesktopShrine.Plugin.BlinkStickBar/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <GOverlayFile Include="../../samples/DesktopShrine.Plugin.GOverlay/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <ConsoleDisplayFile Include="../../samples/DesktopShrine.Plugin.ConsoleDisplay/bin/$(Configuration)/net10.0/**/*"/>
+    </ItemGroup>
+
+    <MakeDir Directories="$(OutDir)contracts;
+                          $(OutDir)plugins/hardware-monitor;
+                          $(OutDir)plugins/audio-collector;
+                          $(OutDir)plugins/windows-now-playing;
+                          $(OutDir)plugins/steam-now-playing;
+                          $(OutDir)plugins/artwork-palette;
+                          $(OutDir)plugins/blinkstick-bar;
+                          $(OutDir)plugins/goverlay;
+                          $(OutDir)plugins/console-display"/>
+    <Copy SourceFiles="@(DevelopmentContract)"
+          DestinationFiles="@(DevelopmentContract->'$(OutDir)contracts/%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(HardwareMonitorFile)"
+          DestinationFiles="@(HardwareMonitorFile->'$(OutDir)plugins/hardware-monitor/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.HardwareMonitor/plugin.json"
+          DestinationFolder="$(OutDir)plugins/hardware-monitor"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(AudioCollectorFile)"
+          DestinationFiles="@(AudioCollectorFile->'$(OutDir)plugins/audio-collector/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.AudioCollector/plugin.json"
+          DestinationFolder="$(OutDir)plugins/audio-collector"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(WindowsNowPlayingFile)"
+          DestinationFiles="@(WindowsNowPlayingFile->'$(OutDir)plugins/windows-now-playing/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.WindowsNowPlaying/plugin.json"
+          DestinationFolder="$(OutDir)plugins/windows-now-playing"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(SteamNowPlayingFile)"
+          DestinationFiles="@(SteamNowPlayingFile->'$(OutDir)plugins/steam-now-playing/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.SteamNowPlaying/plugin.json"
+          DestinationFolder="$(OutDir)plugins/steam-now-playing"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(ArtworkPaletteFile)"
+          DestinationFiles="@(ArtworkPaletteFile->'$(OutDir)plugins/artwork-palette/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.ArtworkPalette/plugin.json"
+          DestinationFolder="$(OutDir)plugins/artwork-palette"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(BlinkStickBarFile)"
+          DestinationFiles="@(BlinkStickBarFile->'$(OutDir)plugins/blinkstick-bar/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.BlinkStickBar/plugin.json"
+          DestinationFolder="$(OutDir)plugins/blinkstick-bar"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(GOverlayFile)"
+          DestinationFiles="@(GOverlayFile->'$(OutDir)plugins/goverlay/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.GOverlay/plugin.json"
+          DestinationFolder="$(OutDir)plugins/goverlay"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(ConsoleDisplayFile)"
+          DestinationFiles="@(ConsoleDisplayFile->'$(OutDir)plugins/console-display/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.ConsoleDisplay/plugin.json"
+          DestinationFolder="$(OutDir)plugins/console-display"
+          SkipUnchangedFiles="true"/>
+  </Target>
+</Project>

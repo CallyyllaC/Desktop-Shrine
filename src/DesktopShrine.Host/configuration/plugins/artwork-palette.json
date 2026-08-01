@@ -1,0 +1,9 @@
+{
+  "AlphaThreshold": 24,
+  "MaximumAnalysisDimension": 128,
+  "BorderPercent": 0.05,
+  "BorderWeight": 0.15,
+  "MaximumAccentLightness": 0.72,
+  "MinimumDistinctAccentDistance": 0.035,
+  "MinimumAccentAverageAlpha": 0.25
+}

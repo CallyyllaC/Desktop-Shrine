@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>DesktopShrine.Plugin.GOverlay.LegacySdk</AssemblyName>
+    <GOverlayInstallDirectory Condition="'$(GOverlayInstallDirectory)' == ''">$(MSBuildProgramFiles32)\GOverlay</GOverlayInstallDirectory>
+    <DeployGOverlayPlugin Condition="'$(DeployGOverlayPlugin)' == ''">true</DeployGOverlayPlugin>
+    <GOverlayProcessName Condition="'$(GOverlayProcessName)' == ''">GOverlay</GOverlayProcessName>
+    <GOverlayDeploymentScript>$(MSBuildThisFileDirectory)Deploy-GOverlayPlugin.ps1</GOverlayDeploymentScript>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <AssemblyName>DesktopShrine.Plugin.GOverlay.LegacySdk.Debug</AssemblyName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <AssemblyName>DesktopShrine.Plugin.GOverlay.LegacySdk.Release</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Layout/DesktopShrine.Plugin.GOverlay.Layout.csproj" />
+    <Reference Include="Interfaces">
+      <HintPath>$(GOverlayInstallDirectory)\Interfaces.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+  <Target Name="ValidateGOverlaySdk" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(GOverlayInstallDirectory)\Interfaces.dll')"
+           Text="GOverlay Interfaces.dll was not found. Set GOverlayInstallDirectory to the official GOverlay installation directory." />
+  </Target>
+  <Target Name="DeployBuiltGOverlayPlugin"
+          AfterTargets="Build"
+          Condition="'$(DeployGOverlayPlugin)' == 'true'">
+    <Error Condition="!Exists('$(GOverlayDeploymentScript)')"
+           Text="The GOverlay deployment script was not found at $(GOverlayDeploymentScript)." />
+    <Error Condition="!Exists('$(GOverlayInstallDirectory)\Plugins')"
+           Text="The GOverlay Plugins directory was not found at $(GOverlayInstallDirectory)\Plugins." />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(GOverlayDeploymentScript)&quot; -PluginAssemblyPath &quot;$(TargetPath)&quot; -InstallDirectory &quot;$(GOverlayInstallDirectory)&quot; -ProcessName &quot;$(GOverlayProcessName)&quot;" />
+  </Target>
+</Project>

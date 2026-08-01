@@ -1,0 +1,1 @@
+{"id":"artwork-palette","version":"1.0.0","entryAssembly":"DesktopShrine.Plugin.ArtworkPalette.dll","entryType":"DesktopShrine.Plugin.ArtworkPalette.ArtworkPalettePlugin","supportedPlatforms":["windows"],"contractDependencies":[{"packageId":"desktop-shrine.contracts.media","versionRange":">=1.2.0 <2.0.0"}]}

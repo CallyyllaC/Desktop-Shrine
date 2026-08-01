@@ -1,0 +1,6 @@
+{
+  "IncludeArtwork": true,
+  "MaximumArtworkBytes": 16777216,
+  "PublishTimelineUpdates": true,
+  "PausedTimeoutSeconds": 300
+}

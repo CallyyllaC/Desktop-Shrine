@@ -1,0 +1,7 @@
+{
+  "PipeName": "DesktopShrine.GOverlay",
+  "UpdatesPerSecond": 10,
+  "WaterfallIntervalMilliseconds": 500,
+  "WaterfallColumnWidthPixels": 8,
+  "FontName": "Oxanium-Bold_20px.bin"
+}

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../../src/DesktopShrine.Abstractions/DesktopShrine.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

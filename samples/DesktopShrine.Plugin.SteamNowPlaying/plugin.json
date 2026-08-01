@@ -1,0 +1,1 @@
+{"id":"steam-now-playing","version":"1.0.0","entryAssembly":"DesktopShrine.Plugin.SteamNowPlaying.dll","entryType":"DesktopShrine.Plugin.SteamNowPlaying.SteamNowPlayingPlugin","supportedPlatforms":["windows"],"contractDependencies":[{"packageId":"desktop-shrine.contracts.media","versionRange":">=1.1.0 <2.0.0"}]}

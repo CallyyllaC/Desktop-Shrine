@@ -1,0 +1,1 @@
+{"id":"console-display","version":"1.0.0","entryAssembly":"DesktopShrine.Plugin.ConsoleDisplay.dll","entryType":"DesktopShrine.Plugin.ConsoleDisplay.ConsoleDisplayPlugin","contractDependencies":[{"packageId":"desktop-shrine.contracts.audio","versionRange":">=1.0.0 <2.0.0"},{"packageId":"desktop-shrine.contracts.media","versionRange":">=1.0.0 <2.0.0"}]}

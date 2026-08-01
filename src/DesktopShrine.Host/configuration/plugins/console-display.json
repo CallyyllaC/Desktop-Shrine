@@ -1,0 +1,8 @@
+{
+  "ShowMediaUpdates": true,
+  "ShowAudioStatus": true,
+  "AudioStatusIntervalSeconds": 2,
+  "AudioMeterWidth": 16,
+  "AudioMeterFloorDb": -60,
+  "SignalThreshold": 0.0001
+}

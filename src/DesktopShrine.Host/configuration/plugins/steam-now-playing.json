@@ -1,0 +1,13 @@
+{
+  "PollIntervalMilliseconds": 2000,
+  "IncludeArtwork": true,
+  "DownloadArtwork": true,
+  "IncludeStoreMetadata": true,
+  "DownloadStoreMetadata": true,
+  "StoreMetadataCacheHours": 24,
+  "MaximumArtworkBytes": 16777216,
+  "ArtworkDownloadTimeoutSeconds": 5,
+  "UnknownGameTitle": "Unknown Steam game",
+  "ArtworkCacheDirectory": null,
+  "StoreMetadataCacheDirectory": null
+}

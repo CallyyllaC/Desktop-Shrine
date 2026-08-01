@@ -1,0 +1,9 @@
+{
+  "CaptureMode": "loopback",
+  "Device": "default",
+  "FramesPerSecond": 50,
+  "FftSize": 2048,
+  "WaveformSamples": 160,
+  "DevicePollIntervalSeconds": 2,
+  "StatusIntervalSeconds": 0
+}

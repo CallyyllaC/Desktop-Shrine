@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/DesktopShrine.Abstractions/DesktopShrine.Abstractions.csproj"/>
+    <ProjectReference Include="../../contracts/DesktopShrine.Contracts.Media/DesktopShrine.Contracts.Media.csproj"/>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.3"/>
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DesktopShrine.Integration.Tests"/>
+  </ItemGroup>
+</Project>

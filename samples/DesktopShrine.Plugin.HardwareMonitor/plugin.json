@@ -1,0 +1,1 @@
+{"id":"hardware-monitor","version":"2.0.0","entryAssembly":"DesktopShrine.Plugin.HardwareMonitor.dll","entryType":"DesktopShrine.Plugin.HardwareMonitor.HardwareMonitorPlugin","supportedPlatforms":["windows"],"contractDependencies":[{"packageId":"desktop-shrine.contracts.hardware","versionRange":">=1.0.0 <2.0.0"}]}
