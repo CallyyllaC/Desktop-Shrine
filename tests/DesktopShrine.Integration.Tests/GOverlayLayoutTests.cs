@@ -763,6 +763,53 @@ public sealed class GOverlayLayoutTests
     }
 
     [Fact]
+    public void AudioFramesAreAggregatedWithoutRebuildingProgressState()
+    {
+        var anchor = new DateTimeOffset(
+            2026,
+            7,
+            28,
+            12,
+            0,
+            0,
+            TimeSpan.Zero);
+        var builder = new GOverlayStateBuilder();
+        builder.Update(new NowPlayingState
+        {
+            IsAvailable = true,
+            CapturedAt = anchor,
+            TimelineLastUpdatedAt = anchor,
+            Status = PlaybackStatus.Playing,
+            Position = TimeSpan.FromSeconds(10),
+            StartTime = TimeSpan.Zero,
+            EndTime = TimeSpan.FromMinutes(4),
+            Artwork = new()
+            {
+                ContentType = "image/png",
+                Data = new byte[1024]
+            }
+        });
+        var revision = builder.Current.Revision;
+
+        for (var index = 0; index < 50; index++)
+        {
+            builder.Update(Frame(
+                anchor + TimeSpan.FromMilliseconds(index * 20),
+                index,
+                [0.2f, 0, 0, 0, 0, 0, 0, 0]));
+        }
+
+        Assert.Equal(revision, builder.Current.Revision);
+
+        var displayed = builder.PrepareDisplayState(
+            anchor + TimeSpan.FromSeconds(1));
+
+        Assert.Equal(11, displayed.PositionSeconds);
+        Assert.True(displayed.HasWaterfallColumn);
+        Assert.True(displayed.Revision > revision);
+    }
+
+    [Fact]
     public void PausedProgressDoesNotAdvanceBetweenMediaEvents()
     {
         var anchor = new DateTimeOffset(

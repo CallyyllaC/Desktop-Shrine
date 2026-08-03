@@ -28,6 +28,7 @@ internal sealed class GOverlayStateBuilder
     private bool audioActive;
     private bool hasWaterfallColumn;
     private float[] waterfallBands = [];
+    private string mediaArtworkKey = string.Empty;
     private string? waterfallVisualKey;
     private string fontName = "Oxanium-Bold_20px.bin";
 
@@ -62,6 +63,7 @@ internal sealed class GOverlayStateBuilder
     public GOverlayDashboardState Update(NowPlayingState value)
     {
         media = value;
+        mediaArtworkKey = ArtworkKey(value.Artwork);
         return Rebuild(value.CapturedAt);
     }
 
@@ -101,10 +103,13 @@ internal sealed class GOverlayStateBuilder
         return Rebuild(DateTimeOffset.UtcNow);
     }
 
-    public GOverlayDashboardState Update(AudioSpectrumFrame value)
+    public void Update(AudioSpectrumFrame value)
     {
+        // Audio is a high-rate stream. Accumulate it here and let the bridge's
+        // display tick rebuild once when a waterfall column is ready. Rebuilding
+        // for every frame needlessly hashes artwork and can starve progress
+        // updates behind the shared state lock.
         waterfall.Add(value);
-        return Rebuild(value.CapturedAt);
     }
 
     public GOverlayDashboardState PrepareDisplayState(DateTimeOffset now)
@@ -151,7 +156,7 @@ internal sealed class GOverlayStateBuilder
             ? DisplayPosition(media!, now)
             : TimeSpan.Zero;
         var activePalette = palette?.IsAvailable == true ? palette : null;
-        var artworkKey = ArtworkKey(artwork);
+        var artworkKey = available ? mediaArtworkKey : string.Empty;
         var dominant = Colour(
             activePalette?.OutputDominant.BaseColour,
             new(68, 74, 84));

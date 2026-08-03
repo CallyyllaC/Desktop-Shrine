@@ -185,7 +185,7 @@ public sealed class GOverlayPlugin : IOutputPlugin
     {
         token.ThrowIfCancellationRequested();
         lock (gate)
-            bridge!.Update(state!.Update(envelope.Payload));
+            state!.Update(envelope.Payload);
         return ValueTask.CompletedTask;
     }
 
