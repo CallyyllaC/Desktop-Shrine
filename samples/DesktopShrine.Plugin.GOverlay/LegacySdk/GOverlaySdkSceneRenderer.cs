@@ -12,9 +12,6 @@ internal sealed class GOverlaySdkSceneRenderer
     // GOverlay's own live-image renderer submits 40 pixels per USB request.
     // Larger requests are silently dropped by the LCDSysInfo 2.0 transport.
     private const int PixelBatchSize = 40;
-    // Keep each callback bounded so metadata, progress and waterfall work can
-    // continue while a large image is being transferred.
-    private const int ArtworkBatchesPerRender = 4;
     private readonly Dictionary<string, string> fingerprints =
         new(StringComparer.Ordinal);
     private Task<PreparedArtwork>? artworkPreparation;
@@ -27,6 +24,14 @@ internal sealed class GOverlaySdkSceneRenderer
     private long waterfallColumnSequence = long.MinValue;
     private int waterfallWritePosition = -1;
     private float[] waterfallCursorBands = Array.Empty<float>();
+    private long nextPassId;
+    private DateTime lastPassCompletedUtc;
+    private DateTime unavailableUntilUtc;
+    private bool recovering;
+    private bool previousCompatibilityPassUsedArtwork;
+    private GOverlayRenderCompatibilityMode? activeCompatibilityMode;
+    private long connectionGeneration = -1;
+    private bool? devicePresent;
 
     public void ResetForFullRedraw()
     {
@@ -46,6 +51,8 @@ internal sealed class GOverlaySdkSceneRenderer
     public long? Render(
         IHost host,
         GOverlayDashboardScene scene,
+        GOverlayDashboardState state,
+        GOverlayUsbConnectionSnapshot connection,
         int cacheRuns,
         Func<bool> isPriorityStateCurrent)
     {
@@ -54,119 +61,305 @@ internal sealed class GOverlaySdkSceneRenderer
         // physical LCD was cleared. Clearing here caused a full-screen flash
         // and forced expensive artwork uploads on every reset.
         _ = cacheRuns;
-
-        GOverlayArtworkCommand? artwork = null;
-        GOverlayWaterfallCommand? waterfall = null;
-        foreach (var region in scene.Regions)
-            foreach (var command in region.Commands)
-            {
-                if (command is GOverlayArtworkCommand artworkCommand)
-                {
-                    artwork = artworkCommand;
-                    continue;
-                }
-                if (command is GOverlayWaterfallCommand waterfallCommand)
-                {
-                    waterfall = waterfallCommand;
-                    continue;
-                }
-
-                RenderChangedCommand(host, command, scene);
-            }
-
-        if (artwork is not null)
+        var now = DateTime.UtcNow;
+        var compatibilityMode = state.RenderCompatibilityMode
+            == GOverlayRenderCompatibilityMode.IpsSafe;
+        if (activeCompatibilityMode != state.RenderCompatibilityMode)
         {
-            _ = RenderArtwork(
-                host,
-                artwork,
-                scene,
-                isPriorityStateCurrent);
+            activeCompatibilityMode = state.RenderCompatibilityMode;
+            ResetForFullRedraw();
+            host.DebugMessage(
+                $"Desktop Shrine - renderer compatibility={state.RenderCompatibilityMode} firmware={state.DeviceFirmwareRevision}; Interfaces.dll exposes no firmware API and USB REV is not treated as firmware");
         }
 
-        if (waterfall is not null)
-            return RenderWaterfall(host, waterfall);
+        if (connectionGeneration < 0)
+        {
+            connectionGeneration = connection.Generation;
+            devicePresent = connection.IsPresent;
+        }
+        else if (connection.Generation != connectionGeneration)
+        {
+            var previousPresence = devicePresent;
+            connectionGeneration = connection.Generation;
+            devicePresent = connection.IsPresent;
+            ResetForFullRedraw();
+            recovering = true;
+            if (connection.IsPresent == true)
+            {
+                unavailableUntilUtc = now.AddMilliseconds(
+                    state.ReconnectStabilizationMilliseconds);
+                host.DebugMessage(
+                    $"Desktop Shrine - device-state=reconnected source=usb-monitor generation={connection.Generation} changedAt={connection.ChangedAtUtc:O}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
+            }
+            else
+            {
+                unavailableUntilUtc = DateTime.MaxValue;
+                host.DebugMessage(
+                    $"Desktop Shrine - device-state=disconnected source=usb-monitor generation={connection.Generation} changedAt={connection.ChangedAtUtc:O} previousPresent={previousPresence}; pending physical work discarded");
+            }
+        }
 
-        return null;
+        var callbackGap = lastPassCompletedUtc == default
+            ? TimeSpan.Zero
+            : now - lastPassCompletedUtc;
+        var gapThreshold = TimeSpan.FromMilliseconds(Math.Max(
+            2000,
+            state.ReconnectStabilizationMilliseconds * 2));
+        if (compatibilityMode
+            && lastPassCompletedUtc != default
+            && callbackGap >= gapThreshold
+            && unavailableUntilUtc == default)
+        {
+            ResetForFullRedraw();
+            recovering = true;
+            unavailableUntilUtc = now.AddMilliseconds(
+                state.ReconnectStabilizationMilliseconds);
+            host.DebugMessage(
+                $"Desktop Shrine - device-state=disconnected inferredFrom=callback-gap gapMs={(long)callbackGap.TotalMilliseconds}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
+        }
+
+        var pass = new GOverlaySdkRenderPass(
+            host,
+            Interlocked.Increment(ref nextPassId),
+            compatibilityMode,
+            state.MaximumCommandsPerRefresh,
+            state.MaximumDrawMilliseconds);
+        host.DebugMessage(
+            $"Desktop Shrine - render pass {pass.Id} begin mode={state.RenderCompatibilityMode} firmware={state.DeviceFirmwareRevision} thread={Environment.CurrentManagedThreadId} insideDisplayOnLCD=true recovering={recovering}");
+
+        if (unavailableUntilUtc != default && now < unavailableUntilUtc)
+        {
+            host.DebugMessage(
+                $"Desktop Shrine - render pass {pass.Id} device-state=stabilizing; physical draw skipped until {unavailableUntilUtc:O}");
+            pass.Complete("stabilizing");
+            lastPassCompletedUtc = DateTime.UtcNow;
+            return null;
+        }
+        if (unavailableUntilUtc != default)
+        {
+            unavailableUntilUtc = default;
+            host.DebugMessage(
+                $"Desktop Shrine - render pass {pass.Id} device-state=reconnected; starting controlled staged redraw with audio suppressed");
+        }
+
+        try
+        {
+            GOverlayArtworkCommand? artwork = null;
+            GOverlayWaterfallCommand? waterfall = null;
+            var staticChanged = false;
+            var staticDeferred = false;
+            foreach (var region in scene.Regions)
+            {
+                using var regionScope = pass.BeginRegion(region.Id);
+                foreach (var command in region.Commands)
+                {
+                    if (command is GOverlayArtworkCommand artworkCommand)
+                    {
+                        artwork = artworkCommand;
+                        continue;
+                    }
+                    if (command is GOverlayWaterfallCommand waterfallCommand)
+                    {
+                        waterfall = waterfallCommand;
+                        continue;
+                    }
+
+                    if (!RenderChangedCommand(
+                            pass,
+                            command,
+                            scene,
+                            out var changed))
+                        staticDeferred = true;
+                    staticChanged |= changed;
+                }
+            }
+
+            var artworkPending = artwork is not null && NeedsArtwork(artwork);
+            var artworkCommands = 0;
+            if (artwork is not null && artworkPending)
+            {
+                var alternateWithAudio = compatibilityMode
+                    && !recovering
+                    && previousCompatibilityPassUsedArtwork
+                    && waterfall?.HasColumn == true;
+                if (staticChanged || staticDeferred || alternateWithAudio)
+                {
+                    var reason = alternateWithAudio
+                        ? "alternating expensive artwork with latest audio"
+                        : "static/full redraw has priority";
+                    host.DebugMessage(
+                        $"Desktop Shrine - render pass {pass.Id} region=artwork deferred reason={reason}");
+                }
+                else
+                {
+                    using var artworkScope = pass.BeginRegion("artwork");
+                    var before = pass.CommandCount;
+                    artworkPending = RenderArtwork(
+                        pass,
+                        host,
+                        artwork,
+                        scene,
+                        isPriorityStateCurrent,
+                        state.MaximumArtworkBatchesPerRefresh);
+                    artworkCommands = pass.CommandCount - before;
+                }
+            }
+
+            var suppressAudioReason = string.Empty;
+            if (compatibilityMode)
+            {
+                if (recovering)
+                    suppressAudioReason = "controlled base-screen recovery";
+                else if (staticChanged || staticDeferred)
+                    suppressAudioReason = "static/full redraw in this refresh";
+                else if (artworkCommands > 0)
+                    suppressAudioReason = "artwork transfer in this refresh";
+                else if (pass.BudgetExhausted)
+                    suppressAudioReason = "command/time budget exhausted";
+                else if (pass.Id % Math.Max(1, state.AudioRefreshDivisor) != 0)
+                    suppressAudioReason = "configured audio refresh divisor";
+            }
+
+            long? renderedWaterfall = null;
+            if (waterfall is not null && string.IsNullOrEmpty(suppressAudioReason))
+            {
+                using var waterfallScope = pass.BeginRegion("audio-map");
+                renderedWaterfall = RenderWaterfall(
+                    pass,
+                    waterfall,
+                    compatibilityMode);
+                if (waterfall.HasColumn && !renderedWaterfall.HasValue)
+                    suppressAudioReason = "command/time budget deferred audio atomically";
+            }
+            if (waterfall?.HasColumn == true
+                && !string.IsNullOrEmpty(suppressAudioReason))
+                host.DebugMessage(
+                    $"Desktop Shrine - render pass {pass.Id} audio skipped/deferred reason={suppressAudioReason}; newest frame retained, stale frames coalesced");
+
+            if (recovering && !staticDeferred && !artworkPending)
+            {
+                recovering = false;
+                host.DebugMessage(
+                    $"Desktop Shrine - render pass {pass.Id} device-state=stable base-screen-restored; audio resumes on a later refresh");
+            }
+
+            previousCompatibilityPassUsedArtwork = artworkCommands > 0;
+            pass.Complete(pass.BudgetExhausted ? "budget-deferred" : "complete");
+            lastPassCompletedUtc = DateTime.UtcNow;
+            return renderedWaterfall;
+        }
+        catch (GOverlayDeviceCommandException error)
+        {
+            pass.Complete("device-command-failed");
+            ResetForFullRedraw();
+            recovering = true;
+            unavailableUntilUtc = DateTime.UtcNow.AddMilliseconds(
+                state.ReconnectStabilizationMilliseconds);
+            lastPassCompletedUtc = DateTime.UtcNow;
+            host.DebugMessage(
+                $"Desktop Shrine - device-state=disconnected operation={error.Operation} region={error.Region} error={error.GetBaseException().Message}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
+            return null;
+        }
+        catch (Exception error)
+        {
+            pass.Complete("renderer-failed");
+            lastPassCompletedUtc = DateTime.UtcNow;
+            host.DebugMessage(
+                $"Desktop Shrine - render pass {pass.Id} failed without being swallowed: {error}");
+            throw;
+        }
     }
 
-    private void RenderChangedCommand(
-        IHost host,
+    private bool NeedsArtwork(GOverlayArtworkCommand artwork)
+    {
+        return artwork.Fingerprint != requestedArtworkFingerprint
+            || (artwork.HasArtwork
+                && artwork.Fingerprint != displayedArtworkFingerprint
+                && artwork.Fingerprint != failedArtworkFingerprint);
+    }
+
+    private bool RenderChangedCommand(
+        GOverlaySdkRenderPass pass,
         GOverlayDrawCommand command,
-        GOverlayDashboardScene scene)
+        GOverlayDashboardScene scene,
+        out bool changed)
     {
         if (fingerprints.TryGetValue(
                 command.Key,
                 out var previous)
             && previous == command.Fingerprint)
-            return;
+        {
+            changed = false;
+            return true;
+        }
 
-        RenderCommand(host, command, scene);
+        changed = false;
+        if (!pass.CanIssue(EstimatedCommandCount(command)))
+            return false;
+
+        RenderCommand(pass, command, scene);
         fingerprints[command.Key] = command.Fingerprint;
+        changed = true;
+        return true;
     }
 
+    private static int EstimatedCommandCount(GOverlayDrawCommand command) =>
+        command is GOverlayMeterBarCommand or GOverlayProgressCommand ? 2 : 1;
+
     private static void RenderCommand(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayDrawCommand command,
         GOverlayDashboardScene scene)
     {
         switch (command)
         {
             case GOverlayFillRectangleCommand fill:
-                Fill(host, fill.Bounds, fill.Colour);
+                Fill(pass, fill.Bounds, fill.Colour);
                 break;
             case GOverlayStrokeRectangleCommand stroke:
-                host.LCDSys2_Draw_Rectangle(
-                    stroke.Bounds.X,
-                    stroke.Bounds.Y,
-                    stroke.Bounds.Right - 1,
-                    stroke.Bounds.Bottom - 1,
-                    stroke.Colour.Rgb565,
-                    stroke.Thickness,
-                    0);
+                pass.Rectangle(
+                    stroke.Bounds,
+                    stroke.Colour,
+                    stroke.Thickness);
                 break;
             case GOverlayLineCommand line:
-                Line(host, line);
+                Line(pass, line);
                 break;
             case GOverlayTextCommand text:
-                Text(host, text, scene);
+                Text(pass, text, scene);
                 break;
             case GOverlayMeterBarCommand meter:
-                Meter(host, meter);
+                Meter(pass, meter);
                 break;
             case GOverlayProgressCommand progress:
-                Progress(host, progress);
+                Progress(pass, progress);
                 break;
         }
     }
 
     private static void Text(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayTextCommand text,
         GOverlayDashboardScene scene)
     {
         var font = FindFont(scene);
-        host.LCDSys2_Draw_Text_Font(
-            text.Bounds.X,
-            text.Bounds.Y,
-            text.Text,
-            text.Bounds.Width,
-            text.Colour.Rgb565,
-            text.Background.Rgb565,
-            font,
-            0,
-            (int)text.Alignment,
-            string.Empty,
-            0);
+        pass.Text(text, font);
     }
 
     private bool RenderArtwork(
+        GOverlaySdkRenderPass pass,
         IHost host,
         GOverlayArtworkCommand artwork,
         GOverlayDashboardScene scene,
-        Func<bool> isPriorityStateCurrent)
+        Func<bool> isPriorityStateCurrent,
+        int maximumArtworkBatches)
     {
         if (artwork.Fingerprint != requestedArtworkFingerprint)
         {
+            if ((!artwork.HasArtwork || !hasDisplayedArtwork)
+                && !pass.CanIssue(4))
+                return true;
+
             requestedArtworkFingerprint = artwork.Fingerprint;
             failedArtworkFingerprint = string.Empty;
             artworkPreparation = null;
@@ -174,7 +367,7 @@ internal sealed class GOverlaySdkSceneRenderer
 
             if (!artwork.HasArtwork)
             {
-                Placeholder(host, artwork, scene);
+                Placeholder(pass, artwork, scene);
                 displayedArtworkFingerprint = artwork.Fingerprint;
                 hasDisplayedArtwork = false;
                 return false;
@@ -183,7 +376,7 @@ internal sealed class GOverlaySdkSceneRenderer
             // Keep the previous image visible while the replacement is decoded
             // and resized. On the first image, establish a useful placeholder.
             if (!hasDisplayedArtwork)
-                Placeholder(host, artwork, scene);
+                Placeholder(pass, artwork, scene);
 
             artworkPreparation = Task.Run(() => PrepareArtwork(artwork));
         }
@@ -209,6 +402,8 @@ internal sealed class GOverlaySdkSceneRenderer
 
             if (artworkPreparation.IsFaulted)
             {
+                if (!pass.CanIssue(4))
+                    return true;
                 var error = artworkPreparation.Exception!
                     .GetBaseException()
                     .Message;
@@ -216,7 +411,7 @@ internal sealed class GOverlaySdkSceneRenderer
                     "Desktop Shrine - artwork preparation failed: " + error);
                 failedArtworkFingerprint = artwork.Fingerprint;
                 artworkPreparation = null;
-                Placeholder(host, artwork, scene);
+                Placeholder(pass, artwork, scene);
                 displayedArtworkFingerprint = artwork.Fingerprint;
                 hasDisplayedArtwork = false;
                 return false;
@@ -225,14 +420,17 @@ internal sealed class GOverlaySdkSceneRenderer
             if (!isPriorityStateCurrent())
                 return CancelArtworkTransfer(host);
 
+            if (!pass.CanIssue(2))
+                return true;
+
             artworkTransfer = artworkPreparation.Result;
             artworkPreparation = null;
             // A cancelled upload can leave pixels from several tracks in this
             // region. One cheap rectangle reset gives the replacement a clean
             // canvas without touching metadata, footer or waterfall history.
-            Fill(host, artwork.Bounds, artwork.Background);
+            Fill(pass, artwork.Bounds, artwork.Background);
             host.DebugMessage(
-                $"Desktop Shrine - transferring {artworkTransfer.Bounds.Width}x{artworkTransfer.Bounds.Height} opaque artwork into {artwork.Bounds.Width}x{artwork.Bounds.Height} from {artwork.ArtworkData.Length} bytes");
+                $"Desktop Shrine - render pass {pass.Id} transferring {artworkTransfer.Bounds.Width}x{artworkTransfer.Bounds.Height} opaque artwork into {artwork.Bounds.Width}x{artwork.Bounds.Height} sourceBytes={artwork.ArtworkData.Length} preparedRgb565Bytes={artworkTransfer.Colours.Length * 2}");
         }
 
         // Transfer a bounded slice at native GOverlay packet size. The next
@@ -240,7 +438,8 @@ internal sealed class GOverlaySdkSceneRenderer
         // the transfer between any two packets.
         var batches = 0;
         while (artworkTransfer.NextPixel < artworkTransfer.Colours.Length
-               && batches < ArtworkBatchesPerRender)
+               && batches < Math.Max(1, maximumArtworkBatches)
+               && pass.CanIssue(1))
         {
             if (!isPriorityStateCurrent())
                 return CancelArtworkTransfer(host);
@@ -261,7 +460,7 @@ internal sealed class GOverlaySdkSceneRenderer
                     artworkTransfer.Colours[pixelIndex]
                 });
             }
-            host.LCDSys2_Draw_Pixels(pixels);
+            pass.Pixels(pixels);
             batches++;
 
             // The bridge receives new state on its own thread while this
@@ -541,13 +740,13 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private static void Placeholder(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayArtworkCommand artwork,
         GOverlayDashboardScene scene)
     {
-        Fill(host, artwork.Bounds, artwork.Background);
+        Fill(pass, artwork.Bounds, artwork.Background);
         Line(
-            host,
+            pass,
             new(
                 "placeholder.one",
                 artwork.Bounds.X,
@@ -556,7 +755,7 @@ internal sealed class GOverlaySdkSceneRenderer
                 artwork.Bounds.Bottom - 1,
                 artwork.Foreground));
         Line(
-            host,
+            pass,
             new(
                 "placeholder.two",
                 artwork.Bounds.Right - 1,
@@ -565,7 +764,7 @@ internal sealed class GOverlaySdkSceneRenderer
                 artwork.Bounds.Bottom - 1,
                 artwork.Foreground));
         Text(
-            host,
+            pass,
             new(
                 "placeholder.text",
                 new(
@@ -582,15 +781,15 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private static void Meter(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayMeterBarCommand meter)
     {
-        Fill(host, meter.Bounds, meter.Background);
+        Fill(pass, meter.Bounds, meter.Background);
         var height = Math.Max(
             1,
             (int)Math.Round(meter.Bounds.Height * meter.Value));
         Fill(
-            host,
+            pass,
             new(
                 meter.Bounds.X,
                 meter.Bounds.Bottom - height,
@@ -600,13 +799,20 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private long? RenderWaterfall(
-        IHost host,
-        GOverlayWaterfallCommand waterfall)
+        GOverlaySdkRenderPass pass,
+        GOverlayWaterfallCommand waterfall,
+        bool compatibilityMode)
     {
+        var estimatedCommands = EstimateWaterfallCommands(
+            waterfall,
+            compatibilityMode);
+        if (!pass.CanIssue(estimatedCommands))
+            return null;
+
         if (waterfall.ResetSequence != waterfallResetSequence)
         {
             Fill(
-                host,
+                pass,
                 waterfall.Bounds,
                 waterfall.Background);
             waterfallResetSequence = waterfall.ResetSequence;
@@ -621,15 +827,15 @@ internal sealed class GOverlaySdkSceneRenderer
         if (waterfall.ColumnSequence <= waterfallColumnSequence)
             return waterfall.ColumnSequence;
 
-        RestorePreviousWaterfallCursor(host, waterfall);
-        ClearSkippedWaterfallColumns(host, waterfall);
+        RestorePreviousWaterfallCursor(pass, waterfall);
+        ClearSkippedWaterfallColumns(pass, waterfall, compatibilityMode);
         DrawWaterfallColumn(
-            host,
+            pass,
             waterfall,
             waterfall.WritePosition,
             waterfall.Bands);
         Fill(
-            host,
+            pass,
             waterfall.WriteCursorBounds,
             waterfall.WriteCursorColour);
 
@@ -640,7 +846,7 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private void RestorePreviousWaterfallCursor(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayWaterfallCommand waterfall)
     {
         if (waterfallWritePosition < 0
@@ -648,14 +854,14 @@ internal sealed class GOverlaySdkSceneRenderer
             return;
 
         DrawWaterfallColumn(
-            host,
+            pass,
             waterfall,
             waterfallWritePosition,
             waterfallCursorBands);
     }
 
     private static void DrawWaterfallColumn(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayWaterfallCommand waterfall,
         int writePosition,
         IReadOnlyList<float> bands)
@@ -675,7 +881,7 @@ internal sealed class GOverlaySdkSceneRenderer
             var visualRow =
                 GOverlayWaterfallGeometry.BandCount - band - 1;
             Fill(
-                host,
+                pass,
                 new(
                     x,
                     waterfall.Bounds.Y + (visualRow * rowHeight),
@@ -686,8 +892,9 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private void ClearSkippedWaterfallColumns(
-        IHost host,
-        GOverlayWaterfallCommand waterfall)
+        GOverlaySdkRenderPass pass,
+        GOverlayWaterfallCommand waterfall,
+        bool compatibilityMode)
     {
         if (waterfallColumnSequence == long.MinValue
             || waterfallWritePosition < 0
@@ -699,38 +906,118 @@ internal sealed class GOverlaySdkSceneRenderer
         var background = waterfall.Background;
         if (sequenceDelta >= waterfall.ColumnCount)
         {
-            Fill(host, waterfall.Bounds, background);
+            Fill(pass, waterfall.Bounds, background);
             return;
         }
 
-        foreach (var position in
-                 GOverlayWaterfallGeometry.SkippedPositions(
+        if (compatibilityMode)
+        {
+            foreach (var range in SkippedRanges(waterfall, sequenceDelta))
+                Fill(
+                    pass,
+                    new(
+                        waterfall.Bounds.X
+                            + (range.Start * waterfall.ColumnWidth),
+                        waterfall.Bounds.Y,
+                        range.Count * waterfall.ColumnWidth,
+                        waterfall.Bounds.Height),
+                    background);
+            return;
+        }
+
+        foreach (var position in GOverlayWaterfallGeometry.SkippedPositions(
                      waterfallWritePosition,
                      sequenceDelta,
                      waterfall.ColumnCount))
-        {
             Fill(
-                host,
+                pass,
                 new(
-                    waterfall.Bounds.X
-                        + (position
-                            * waterfall.ColumnWidth),
+                    waterfall.Bounds.X + (position * waterfall.ColumnWidth),
                     waterfall.Bounds.Y,
                     waterfall.ColumnWidth,
                     waterfall.Bounds.Height),
                 background);
+    }
+
+    private int EstimateWaterfallCommands(
+        GOverlayWaterfallCommand waterfall,
+        bool compatibilityMode)
+    {
+        if (waterfall.ResetSequence != waterfallResetSequence)
+        {
+            // Resetting discards the previous cursor and sequence before the
+            // new column is drawn, so old-history restoration/skipped-column
+            // work must not be included in this atomic estimate.
+            return 1 + (waterfall.HasColumn
+                ? GOverlayWaterfallGeometry.BandCount + 1
+                : 0);
         }
+
+        var count = 0;
+        if (!waterfall.HasColumn
+            || waterfall.ColumnSequence <= waterfallColumnSequence)
+            return count;
+
+        if (waterfallWritePosition >= 0 && waterfallCursorBands.Length > 0)
+            count += GOverlayWaterfallGeometry.BandCount;
+
+        if (waterfallColumnSequence != long.MinValue
+            && waterfall.ColumnSequence > waterfallColumnSequence + 1)
+        {
+            var delta = waterfall.ColumnSequence - waterfallColumnSequence;
+            if (delta >= waterfall.ColumnCount)
+                count++;
+            else if (compatibilityMode)
+                count += SkippedRanges(waterfall, delta).Count;
+            else
+                count += GOverlayWaterfallGeometry.SkippedPositions(
+                    waterfallWritePosition,
+                    delta,
+                    waterfall.ColumnCount).Count();
+        }
+
+        return count + GOverlayWaterfallGeometry.BandCount + 1;
+    }
+
+    private IReadOnlyList<(int Start, int Count)> SkippedRanges(
+        GOverlayWaterfallCommand waterfall,
+        long sequenceDelta)
+    {
+        var positions = GOverlayWaterfallGeometry.SkippedPositions(
+                waterfallWritePosition,
+                sequenceDelta,
+                waterfall.ColumnCount)
+            .ToArray();
+        if (positions.Length == 0)
+            return Array.Empty<(int, int)>();
+
+        var ranges = new List<(int Start, int Count)>();
+        var start = positions[0];
+        var count = 1;
+        for (var index = 1; index < positions.Length; index++)
+        {
+            if (positions[index] == positions[index - 1] + 1)
+            {
+                count++;
+                continue;
+            }
+            ranges.Add((start, count));
+            start = positions[index];
+            count = 1;
+        }
+        ranges.Add((start, count));
+        return ranges;
     }
 
     private static void Progress(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayProgressCommand progress)
     {
-        Fill(host, progress.Bounds, progress.Background);
+        Fill(pass, progress.Bounds, progress.Background);
         var width = (int)Math.Round(progress.Bounds.Width * progress.Value);
         if (width > 0)
             Fill(
-                host,
+                pass,
                 new(
                     progress.Direction
                         == GOverlayProgressDirection.RightToLeft
@@ -743,26 +1030,21 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private static void Fill(
-        IHost host,
+        GOverlaySdkRenderPass pass,
         GOverlayRectangle bounds,
         GOverlayColour colour) =>
-        host.LCDSys2_Draw_Rectangle(
-            bounds.X,
-            bounds.Y,
-            bounds.Right - 1,
-            bounds.Bottom - 1,
-            colour.Rgb565,
-            0,
-            0);
+        pass.Rectangle(bounds, colour);
 
-    private static void Line(IHost host, GOverlayLineCommand line)
+    private static void Line(
+        GOverlaySdkRenderPass pass,
+        GOverlayLineCommand line)
     {
         var points = new ArrayList
         {
             new ArrayList { line.X1, line.Y1, line.Colour.Rgb565 },
             new ArrayList { line.X2, line.Y2, line.Colour.Rgb565 }
         };
-        host.LCDSys2_Draw_Lines(points, true, line.Colour.Rgb565);
+        pass.Lines(points, line.Colour.Rgb565);
     }
 
     private static string FindFont(GOverlayDashboardScene scene)

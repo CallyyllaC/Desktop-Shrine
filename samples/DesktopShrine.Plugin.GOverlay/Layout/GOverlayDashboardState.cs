@@ -6,6 +6,12 @@ public enum GOverlayDashboardMode
     Hardware
 }
 
+public enum GOverlayRenderCompatibilityMode
+{
+    IpsSafe,
+    Standard
+}
+
 public sealed class GOverlayHardwareMetricState
 {
     public string Label { get; set; } = string.Empty;
@@ -18,6 +24,13 @@ public sealed class GOverlayDashboardState
 {
     public long Revision { get; set; }
     public long RenderGeneration { get; set; }
+    public GOverlayRenderCompatibilityMode RenderCompatibilityMode { get; set; }
+    public string DeviceFirmwareRevision { get; set; } = string.Empty;
+    public int MaximumCommandsPerRefresh { get; set; } = 48;
+    public int MaximumArtworkBatchesPerRefresh { get; set; } = 4;
+    public int MaximumDrawMilliseconds { get; set; } = 100;
+    public int AudioRefreshDivisor { get; set; } = 1;
+    public int ReconnectStabilizationMilliseconds { get; set; } = 1500;
     public GOverlayDashboardMode Mode { get; set; }
     public bool IsAvailable { get; set; }
     public string PlaybackStatus { get; set; } = "INACTIVE";

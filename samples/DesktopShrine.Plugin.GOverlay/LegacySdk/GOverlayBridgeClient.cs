@@ -9,7 +9,7 @@ internal sealed class GOverlayBridgeClient : IDisposable
     private readonly object stateGate = new();
     private readonly string pipeName;
     private readonly Thread worker;
-    private readonly Queue<WaterfallSample> waterfallQueue = new();
+    private WaterfallSample? latestWaterfall;
     private volatile bool stopping;
     private GOverlayDashboardState? latest;
     private long queuedResetSequence = long.MinValue;
@@ -41,10 +41,7 @@ internal sealed class GOverlayBridgeClient : IDisposable
             lock (stateGate)
             {
                 var current = latest ?? new GOverlayDashboardState();
-                var sample = waterfallQueue.Count > 0
-                    ? waterfallQueue.Peek()
-                    : null;
-                return CopyForDisplay(current, sample);
+                return CopyForDisplay(current, latestWaterfall);
             }
         }
     }
@@ -58,10 +55,9 @@ internal sealed class GOverlayBridgeClient : IDisposable
             if (resetSequence != queuedResetSequence)
                 return;
 
-            while (waterfallQueue.Count > 0
-                   && waterfallQueue.Peek().ColumnSequence
-                       <= columnSequence)
-                waterfallQueue.Dequeue();
+            if (latestWaterfall is not null
+                && latestWaterfall.ColumnSequence <= columnSequence)
+                latestWaterfall = null;
         }
     }
 
@@ -111,7 +107,7 @@ internal sealed class GOverlayBridgeClient : IDisposable
     {
         if (state.WaterfallResetSequence != queuedResetSequence)
         {
-            waterfallQueue.Clear();
+            latestWaterfall = null;
             queuedResetSequence = state.WaterfallResetSequence;
             lastQueuedColumnSequence = long.MinValue;
         }
@@ -121,22 +117,16 @@ internal sealed class GOverlayBridgeClient : IDisposable
                 <= lastQueuedColumnSequence)
             return;
 
-        waterfallQueue.Enqueue(
-            new WaterfallSample(
-                state.WaterfallResetSequence,
-                state.WaterfallColumnSequence,
-                state.WaterfallWritePosition,
-                state.WaterfallColumnWidth,
-                (float[])state.WaterfallBands.Clone()));
+        // The LCD refresh is the consumer clock. Retain only the newest audio
+        // column so a paused or disconnected display cannot accumulate a burst
+        // of stale physical draw work.
+        latestWaterfall = new WaterfallSample(
+            state.WaterfallResetSequence,
+            state.WaterfallColumnSequence,
+            state.WaterfallWritePosition,
+            state.WaterfallColumnWidth,
+            (float[])state.WaterfallBands.Clone());
         lastQueuedColumnSequence = state.WaterfallColumnSequence;
-
-        // Once a complete revolution is queued, older samples can no longer
-        // contribute to the visible circular history. Bounding the queue also
-        // prevents unbounded growth when GOverlay stops requesting draws.
-        while (waterfallQueue.Count
-               > GOverlayWaterfallGeometry.ColumnCountFor(
-                   state.WaterfallColumnWidth))
-            waterfallQueue.Dequeue();
     }
 
     private static GOverlayDashboardState CopyForDisplay(
@@ -147,6 +137,15 @@ internal sealed class GOverlayBridgeClient : IDisposable
         {
             Revision = source.Revision,
             RenderGeneration = source.RenderGeneration,
+            RenderCompatibilityMode = source.RenderCompatibilityMode,
+            DeviceFirmwareRevision = source.DeviceFirmwareRevision,
+            MaximumCommandsPerRefresh = source.MaximumCommandsPerRefresh,
+            MaximumArtworkBatchesPerRefresh =
+                source.MaximumArtworkBatchesPerRefresh,
+            MaximumDrawMilliseconds = source.MaximumDrawMilliseconds,
+            AudioRefreshDivisor = source.AudioRefreshDivisor,
+            ReconnectStabilizationMilliseconds =
+                source.ReconnectStabilizationMilliseconds,
             IsAvailable = source.IsAvailable,
             PlaybackStatus = source.PlaybackStatus,
             Title = source.Title,

@@ -31,7 +31,8 @@ public sealed record GOverlayDeviceSpecification
 public sealed record GOverlayDevice(
     GOverlayDeviceSpecification Specification,
     string InstanceId,
-    string? SerialNumber);
+    string? SerialNumber,
+    string? UsbHardwareRevision = null);
 
 public static class GOverlayDeviceCatalog
 {
@@ -69,6 +70,12 @@ public static class GOverlayDeviceCatalog
     public static bool TryIdentify(
         string deviceInstanceId,
         [NotNullWhen(true)] out GOverlayDevice? device)
+        => TryIdentify(deviceInstanceId, Array.Empty<string>(), out device);
+
+    public static bool TryIdentify(
+        string deviceInstanceId,
+        IEnumerable<string> hardwareIds,
+        [NotNullWhen(true)] out GOverlayDevice? device)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceInstanceId);
 
@@ -96,8 +103,31 @@ public static class GOverlayDeviceCatalog
         var serial = parts.Length == 3 && !string.IsNullOrWhiteSpace(parts[2])
             ? parts[2]
             : null;
-        device = new(specification, deviceInstanceId, serial);
+        var usbHardwareRevision = hardwareIds
+            .Prepend(hardwareId)
+            .Select(ParseUsbHardwareRevision)
+            .FirstOrDefault(value => value is not null);
+        device = new(
+            specification,
+            deviceInstanceId,
+            serial,
+            usbHardwareRevision);
         return true;
+    }
+
+    private static string? ParseUsbHardwareRevision(string value)
+    {
+        const string marker = "REV_";
+        var markerIndex = value.IndexOf(
+            marker,
+            StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0 || value.Length < markerIndex + marker.Length + 4)
+            return null;
+
+        var revision = value.Substring(markerIndex + marker.Length, 4);
+        return revision.All(character => Uri.IsHexDigit(character))
+            ? revision
+            : null;
     }
 }
 
@@ -107,8 +137,11 @@ public static class WindowsGOverlayDeviceDetector
     public static IReadOnlyList<GOverlayDevice> FindConnected()
     {
         var devices = new List<GOverlayDevice>();
-        foreach (var instanceId in WindowsPresentDeviceEnumerator.EnumerateInstanceIds())
-            if (GOverlayDeviceCatalog.TryIdentify(instanceId, out var device))
+        foreach (var present in WindowsPresentDeviceEnumerator.Enumerate())
+            if (GOverlayDeviceCatalog.TryIdentify(
+                    present.InstanceId,
+                    present.HardwareIds,
+                    out var device))
                 devices.Add(device);
 
         return devices;
@@ -122,9 +155,10 @@ internal static class WindowsPresentDeviceEnumerator
     private const uint DigcfAllClasses = 0x00000004;
     private const int ErrorInsufficientBuffer = 122;
     private const int ErrorNoMoreItems = 259;
+    private const uint SpdrpHardwareId = 0x00000001;
     private static readonly IntPtr InvalidHandleValue = new(-1);
 
-    public static IEnumerable<string> EnumerateInstanceIds()
+    public static IEnumerable<PresentDevice> Enumerate()
     {
         var deviceSet = SetupDiGetClassDevs(
             IntPtr.Zero,
@@ -150,7 +184,9 @@ internal static class WindowsPresentDeviceEnumerator
                     throw new Win32Exception(error);
                 }
 
-                yield return GetInstanceId(deviceSet, ref deviceInfo);
+                yield return new(
+                    GetInstanceId(deviceSet, ref deviceInfo),
+                    GetHardwareIds(deviceSet, ref deviceInfo));
             }
         }
         finally
@@ -158,6 +194,36 @@ internal static class WindowsPresentDeviceEnumerator
             if (!SetupDiDestroyDeviceInfoList(deviceSet))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
         }
+    }
+
+    private static string[] GetHardwareIds(
+        IntPtr deviceSet,
+        ref SpDevInfoData deviceInfo)
+    {
+        _ = SetupDiGetDeviceRegistryProperty(
+            deviceSet,
+            ref deviceInfo,
+            SpdrpHardwareId,
+            out _,
+            null,
+            0,
+            out var requiredSize);
+        if (requiredSize == 0)
+            return Array.Empty<string>();
+
+        var buffer = new byte[requiredSize];
+        if (!SetupDiGetDeviceRegistryProperty(
+                deviceSet,
+                ref deviceInfo,
+                SpdrpHardwareId,
+                out _,
+                buffer,
+                requiredSize,
+                out _))
+            return Array.Empty<string>();
+
+        return Encoding.Unicode.GetString(buffer)
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries);
     }
 
     private static string GetInstanceId(
@@ -230,4 +296,23 @@ internal static class WindowsPresentDeviceEnumerator
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetupDiDestroyDeviceInfoList(
         IntPtr deviceInfoSet);
+
+    [DllImport(
+        "setupapi.dll",
+        EntryPoint = "SetupDiGetDeviceRegistryPropertyW",
+        SetLastError = true,
+        CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetupDiGetDeviceRegistryProperty(
+        IntPtr deviceInfoSet,
+        ref SpDevInfoData deviceInfoData,
+        uint property,
+        out uint propertyRegDataType,
+        byte[]? propertyBuffer,
+        uint propertyBufferSize,
+        out uint requiredSize);
+
+    internal sealed record PresentDevice(
+        string InstanceId,
+        string[] HardwareIds);
 }

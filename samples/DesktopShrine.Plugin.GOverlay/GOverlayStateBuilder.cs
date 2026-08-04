@@ -31,6 +31,13 @@ internal sealed class GOverlayStateBuilder
     private string mediaArtworkKey = string.Empty;
     private string? waterfallVisualKey;
     private string fontName = "Oxanium-Bold_20px.bin";
+    private GOverlayRenderCompatibilityMode renderCompatibilityMode;
+    private string deviceFirmwareRevision = string.Empty;
+    private int maximumCommandsPerRefresh = 48;
+    private int maximumArtworkBatchesPerRefresh = 4;
+    private int maximumDrawMilliseconds = 100;
+    private int audioRefreshDivisor = 1;
+    private int reconnectStabilizationMilliseconds = 1500;
 
     public GOverlayDashboardState Current { get; private set; } = new();
     public string FontName
@@ -41,6 +48,22 @@ internal sealed class GOverlayStateBuilder
             fontName = value;
             Rebuild(DateTimeOffset.UtcNow);
         }
+    }
+
+    public void ConfigureRenderer(
+        GOverlayRenderCompatibilityMode mode,
+        string firmwareRevision,
+        GOverlaySettings settings)
+    {
+        renderCompatibilityMode = mode;
+        deviceFirmwareRevision = firmwareRevision;
+        maximumCommandsPerRefresh = settings.MaximumCommandsPerRefresh;
+        maximumArtworkBatchesPerRefresh = settings.MaximumArtworkBatchesPerRefresh;
+        maximumDrawMilliseconds = settings.MaximumDrawMilliseconds;
+        audioRefreshDivisor = settings.AudioRefreshDivisor;
+        reconnectStabilizationMilliseconds =
+            settings.ReconnectStabilizationMilliseconds;
+        Rebuild(DateTimeOffset.UtcNow);
     }
 
     public GOverlayStateBuilder(
@@ -181,6 +204,14 @@ internal sealed class GOverlayStateBuilder
         {
             Revision = ++revision,
             RenderGeneration = renderGeneration,
+            RenderCompatibilityMode = renderCompatibilityMode,
+            DeviceFirmwareRevision = deviceFirmwareRevision,
+            MaximumCommandsPerRefresh = maximumCommandsPerRefresh,
+            MaximumArtworkBatchesPerRefresh = maximumArtworkBatchesPerRefresh,
+            MaximumDrawMilliseconds = maximumDrawMilliseconds,
+            AudioRefreshDivisor = audioRefreshDivisor,
+            ReconnectStabilizationMilliseconds =
+                reconnectStabilizationMilliseconds,
             Mode = hardwareVisible
                 ? GOverlayDashboardMode.Hardware
                 : GOverlayDashboardMode.Media,

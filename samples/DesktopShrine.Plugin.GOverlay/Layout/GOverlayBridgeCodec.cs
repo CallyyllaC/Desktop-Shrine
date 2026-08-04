@@ -4,7 +4,7 @@ namespace DesktopShrine.Plugin.GOverlay.Layout;
 
 public static class GOverlayBridgeCodec
 {
-    public const int ProtocolVersion = 8;
+    public const int ProtocolVersion = 9;
     private const int MaximumFrameBytes = 32 * 1024 * 1024;
     private const int MaximumHardwareMetrics = 16;
 
@@ -65,6 +65,13 @@ public static class GOverlayBridgeCodec
             writer.Write(state.VirtualMemorySummary ?? string.Empty);
             writer.Write(state.PhysicalMemoryLevel);
             writer.Write(state.VirtualMemoryLevel);
+            writer.Write((int)state.RenderCompatibilityMode);
+            writer.Write(state.DeviceFirmwareRevision ?? string.Empty);
+            writer.Write(state.MaximumCommandsPerRefresh);
+            writer.Write(state.MaximumArtworkBatchesPerRefresh);
+            writer.Write(state.MaximumDrawMilliseconds);
+            writer.Write(state.AudioRefreshDivisor);
+            writer.Write(state.ReconnectStabilizationMilliseconds);
         }
 
         using var header = new BinaryWriter(output, Encoding.UTF8, true);
@@ -181,6 +188,21 @@ public static class GOverlayBridgeCodec
                     state.VirtualMemoryLevel = frame.ReadDouble();
                 }
             }
+        }
+        if (version >= 9)
+        {
+            var mode = frame.ReadInt32();
+            if (!Enum.IsDefined(typeof(GOverlayRenderCompatibilityMode), mode))
+                throw new InvalidDataException(
+                    "Invalid GOverlay render compatibility mode.");
+            state.RenderCompatibilityMode =
+                (GOverlayRenderCompatibilityMode)mode;
+            state.DeviceFirmwareRevision = frame.ReadString();
+            state.MaximumCommandsPerRefresh = frame.ReadInt32();
+            state.MaximumArtworkBatchesPerRefresh = frame.ReadInt32();
+            state.MaximumDrawMilliseconds = frame.ReadInt32();
+            state.AudioRefreshDivisor = frame.ReadInt32();
+            state.ReconnectStabilizationMilliseconds = frame.ReadInt32();
         }
 
         return state;

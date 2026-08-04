@@ -16,11 +16,15 @@ public sealed class LegacyGOverlayPlugin : IPlugin
 #endif
     private readonly GOverlayBridgeClient bridge =
         new("DesktopShrine.GOverlay");
+    private readonly GOverlayUsbConnectionMonitor connectionMonitor = new();
     private readonly GOverlayDashboardLayout layout = new();
     private readonly GOverlaySdkSceneRenderer renderer = new();
+    private static readonly object RenderGate = new();
+    private readonly object snapshotGate = new();
     private IHost? host;
     private long renderedGeneration = long.MinValue;
     private bool initialized;
+    private GOverlayDashboardState? pendingDisplayState;
 
     internal static string CurrentFontName { get; private set; } =
         "Oxanium-Bold_20px.bin";
@@ -41,7 +45,19 @@ public sealed class LegacyGOverlayPlugin : IPlugin
         bridge.Start();
     }
 
-    public Hashtable CallBacks(string method) => new();
+    public Hashtable CallBacks(string method)
+    {
+        if (method.Equals(
+                "willrequestvalues",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // This is GOverlay's state-production phase. Snapshot only; all
+            // physical SDK calls remain in LCDSys2_DisplayOnLCD.
+            lock (snapshotGate)
+                pendingDisplayState = bridge.ForDisplay;
+        }
+        return new() { ["value"] = 0 };
+    }
 
     public bool SensorHasCustomDraw(string method) =>
         method == DashboardElementId;
@@ -101,27 +117,40 @@ public sealed class LegacyGOverlayPlugin : IPlugin
         if (sensorId != DashboardElementId || host is null)
             return new();
 
-        var state = bridge.ForDisplay;
-        if (state.RenderGeneration != renderedGeneration)
+        // GOverlay can request custom elements from different worker threads.
+        // The dashboard owns one physical SDK gate, covering the entire pass,
+        // so even a re-entrant host callback cannot overlap USB commands.
+        lock (RenderGate)
         {
-            renderer.ResetForFullRedraw();
-            renderedGeneration = state.RenderGeneration;
-        }
-        CurrentFontName = string.IsNullOrWhiteSpace(state.FontName)
-            ? "Oxanium-Bold_20px.bin"
-            : state.FontName;
-        var scene = layout.Compose(state, DateTime.Now);
-        var artworkState = ArtworkTransferState.Capture(state);
-        var renderedWaterfallSequence = renderer.Render(
-            host,
-            scene,
-            cacheRuns,
-            () => artworkState.Matches(bridge.Latest));
-        if (renderedWaterfallSequence.HasValue)
-        {
-            bridge.AcknowledgeWaterfall(
-                state.WaterfallResetSequence,
-                renderedWaterfallSequence.Value);
+            GOverlayDashboardState state;
+            lock (snapshotGate)
+            {
+                state = pendingDisplayState ?? bridge.ForDisplay;
+                pendingDisplayState = null;
+            }
+            if (state.RenderGeneration != renderedGeneration)
+            {
+                renderer.ResetForFullRedraw();
+                renderedGeneration = state.RenderGeneration;
+            }
+            CurrentFontName = string.IsNullOrWhiteSpace(state.FontName)
+                ? "Oxanium-Bold_20px.bin"
+                : state.FontName;
+            var scene = layout.Compose(state, DateTime.Now);
+            var artworkState = ArtworkTransferState.Capture(state);
+            var renderedWaterfallSequence = renderer.Render(
+                host,
+                scene,
+                state,
+                connectionMonitor.Snapshot,
+                cacheRuns,
+                () => artworkState.Matches(bridge.Latest));
+            if (renderedWaterfallSequence.HasValue)
+            {
+                bridge.AcknowledgeWaterfall(
+                    state.WaterfallResetSequence,
+                    renderedWaterfallSequence.Value);
+            }
         }
         return new();
     }

@@ -53,6 +53,22 @@ public sealed class GOverlayDeviceTests
         Assert.False(GOverlayDeviceCatalog.TryIdentify(instanceId, out _));
     }
 
+    [Theory]
+    [InlineData("USB\\VID_20A0&PID_41ED&REV_0100", "0100")]
+    [InlineData("USB\\VID_20A0&PID_41ED&REV_01AF", "01AF")]
+    public void UsbHardwareRevisionIsRecordedWithoutTreatingItAsFirmware(
+        string hardwareId,
+        string expectedRevision)
+    {
+        var identified = GOverlayDeviceCatalog.TryIdentify(
+            @"USB\VID_20A0&PID_41ED\LCDSZ",
+            [hardwareId],
+            out var device);
+
+        Assert.True(identified);
+        Assert.Equal(expectedRevision, device!.UsbHardwareRevision);
+    }
+
     [Fact]
     public void CatalogRecordsPublishedClassicDisplaySpecifications()
     {

@@ -1,5 +1,8 @@
 # Desktop Shrine
 
+> [!Warning]
+> There are currently issues using some GOverlay devices, either IPS or later (251) firmware is causing it to crash and go into and infinite boot loop. I am working on a fix.
+
 Desktop Shrine is a modular Windows desktop runtime that turns activity on the computer into ambient visual output.
 
 It can react to music, games, desktop audio, and hardware activity, then present that information through devices such as a GOverlay LCD screen or a BlinkStick RGBW LED strip. Inputs and outputs are implemented as plugins, allowing the system to grow without turning the host application into one enormous switch statement.
@@ -79,6 +82,13 @@ After installing GOverlay and the Desktop Shrine bridge:
 
 The GOverlay output should then be available to display media, game, and
 hardware information published by Desktop Shrine.
+
+`CompatibilityMode` in `configuration/plugins/goverlay.json` defaults to
+`Auto`. The legacy GOverlay plugin API does not expose the LCDSysInfo2 firmware
+revision, so `Auto` uses the bounded IPS-safe renderer. Owners of a confirmed
+FW246/TN unit can select `Standard` to retain the original unbudgeted scheduling;
+`IpsSafe` forces staged redraws. The same file exposes command, artwork-batch,
+draw-time, audio-rate, and reconnect-stabilization budgets.
 
 ## Configuration
 
