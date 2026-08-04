@@ -66,8 +66,6 @@ Root: HKCU; Subkey: "Software\Desktop Shrine"; ValueType: dword; ValueName: "Run
 Root: HKCU; Subkey: "Software\Desktop Shrine"; ValueType: dword; ValueName: "RunAsAdministrator"; ValueData: "0"; Check: UseUserMode
 
 [Run]
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""{#StartupTaskName}"" /F"; Flags: runhidden waituntilterminated; StatusMsg: "Updating Desktop Shrine startup..."
-Filename: "{sys}\schtasks.exe"; Parameters: "/Create /TN ""{#StartupTaskName}"" /SC ONLOGON /RL HIGHEST /TR """"{app}\{#MyAppExeName}"""" /F"; Flags: runhidden waituntilterminated; Tasks: startup and runasadmin; StatusMsg: "Registering elevated startup..."
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\GOverlaySetup.msi"""; Flags: waituntilterminated; Tasks: goverlay; StatusMsg: "Installing legacy GOverlay..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\integrations\goverlay\Deploy-GOverlayPlugin.ps1"" -PluginAssemblyPath ""{app}\integrations\goverlay\DesktopShrine.Plugin.GOverlay.LegacySdk.Release.dll"" -InstallDirectory ""{code:GetGOverlayDirectory}"" -ProcessName GOverlay -ElevatedDeployment"; Flags: runhidden waituntilterminated; Check: CanDeployGOverlayBridge; StatusMsg: "Installing the Desktop Shrine GOverlay bridge..."
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--launch"; Description: "Start Desktop Shrine now"; Flags: postinstall nowait skipifsilent runasoriginaluser
@@ -124,9 +122,53 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   RunKey: String;
+  ResultCode: Integer;
+  StartupTaskParameters: String;
 begin
   if CurStep = ssPostInstall then
   begin
+    { Remove any startup task left by an earlier installation. A missing task
+      returns a non-zero exit code and is harmless here. }
+    Exec(
+      ExpandConstant('{sys}\schtasks.exe'),
+      '/Delete /TN "{#StartupTaskName}" /F',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode);
+
+    if IsTaskSelected('startup') and UseAdministratorMode() then
+    begin
+      { SchTasks needs one quoting layer for its own command parser in addition
+        to the quotes which keep the spaced executable path in one argument. }
+      StartupTaskParameters := Format(
+        '/Create /TN "{#StartupTaskName}" /SC ONLOGON /RL HIGHEST /IT ' +
+        '/TR "''%s''" /F', [ExpandConstant(
+          '{app}\{#MyAppExeName}')]);
+      Log('Creating elevated startup task with parameters: ' +
+        StartupTaskParameters);
+
+      if not Exec(
+        ExpandConstant('{sys}\schtasks.exe'),
+        StartupTaskParameters,
+        '',
+        SW_HIDE,
+        ewWaitUntilTerminated,
+        ResultCode) then
+      begin
+        RaiseException(
+          'Windows Task Scheduler could not be started to register ' +
+          'Desktop Shrine startup.');
+      end;
+
+      if ResultCode <> 0 then
+      begin
+        RaiseException(Format(
+          'Windows Task Scheduler could not register Desktop Shrine ' +
+          'startup (exit code %d).', [ResultCode]));
+      end;
+    end;
+
     if not IsTaskSelected('startup') then
     begin
       RunKey := 'Software\Microsoft\Windows\CurrentVersion\Run';
