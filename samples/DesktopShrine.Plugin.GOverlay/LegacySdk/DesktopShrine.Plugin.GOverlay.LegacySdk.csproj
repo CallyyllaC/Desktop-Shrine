@@ -18,6 +18,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Layout/DesktopShrine.Plugin.GOverlay.Layout.csproj" />
+    <ProjectReference Include="../../../src/DesktopShrine.Storage/DesktopShrine.Storage.csproj" />
     <Reference Include="Interfaces">
       <HintPath>$(GOverlayInstallDirectory)\Interfaces.dll</HintPath>
       <Private>false</Private>

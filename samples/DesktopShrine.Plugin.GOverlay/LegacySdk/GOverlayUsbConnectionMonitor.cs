@@ -24,10 +24,7 @@ internal sealed class GOverlayUsbConnectionMonitor : IDisposable
         get
         {
             lock (gate)
-                return new(
-                    present,
-                    generation,
-                    changedAtUtc);
+                return new(present, generation, changedAtUtc);
         }
     }
 
@@ -55,6 +52,9 @@ internal sealed class GOverlayUsbConnectionMonitor : IDisposable
             present = current;
             generation++;
             changedAtUtc = DateTime.UtcNow;
+            GOverlayLcdCommandTrace.Event(
+                "UsbPresenceChanged",
+                $"thread={Environment.CurrentManagedThreadId} present={current} generation={generation} changedAt={changedAtUtc:O} device=VID_20A0_PID_41ED");
         }
     }
 

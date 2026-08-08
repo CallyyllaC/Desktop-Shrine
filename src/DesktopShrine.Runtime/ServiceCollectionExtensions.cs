@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IContractRegistry, ContractRegistry>();
         services.AddSingleton<IInputActivityRegistry, InputActivityRegistry>();
+        services.AddSingleton<LocalAppDataMigration>();
         services.AddSingleton<IPortRegistry, PortRegistry>();
         services.AddSingleton<IRouteTable, RouteTable>();
         services.AddSingleton<IPortBus, PortBus>();

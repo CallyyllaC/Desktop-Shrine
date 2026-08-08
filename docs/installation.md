@@ -43,7 +43,7 @@ included in release packages.
 Writable configuration is stored in:
 
 ```text
-%LOCALAPPDATA%\Desktop Shrine\configuration
+%LOCALAPPDATA%\DesktopShrine\configuration
 ```
 
 Application binaries and plugins are installed beneath Program Files. Removing
@@ -107,6 +107,6 @@ To choose a four-part installer version or skip tests during a packaging-only
 iteration, call the PowerShell entry point directly:
 
 ```powershell
-.\scripts\Build-WindowsInstaller.ps1 -Version 1.0.0.0
+.\scripts\Build-WindowsInstaller.ps1 -Version 1.1.0
 .\scripts\Build-WindowsInstaller.ps1 -SkipTests
 ```

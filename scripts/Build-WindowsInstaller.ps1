@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')]
-    [string]$Version = '1.0.1',
+    [string]$Version = '1.1.0',
 
     [ValidateSet('win-x64')]
     [string]$RuntimeIdentifier = 'win-x64',
@@ -179,6 +179,7 @@ foreach ($plugin in $plugins) {
 $legacyProject = Join-Path $repositoryRoot 'samples\DesktopShrine.Plugin.GOverlay\LegacySdk\DesktopShrine.Plugin.GOverlay.LegacySdk.csproj'
 Invoke-DotNet build $legacyProject `
     --configuration Release `
+    "-p:Version=$Version" `
     "-p:GOverlayInstallDirectory=$GOverlayInstallDirectory" `
     '-p:DeployGOverlayPlugin=false' `
     '-p:DebugSymbols=false' `
@@ -191,6 +192,9 @@ Copy-Item -LiteralPath (Join-Path $legacyOutput 'DesktopShrine.Plugin.GOverlay.L
     -Destination $integrationDestination `
     -Force
 Copy-Item -LiteralPath (Join-Path $legacyOutput 'DesktopShrine.Plugin.GOverlay.Layout.dll') `
+    -Destination $integrationDestination `
+    -Force
+Copy-Item -LiteralPath (Join-Path $legacyOutput 'DesktopShrine.Storage.dll') `
     -Destination $integrationDestination `
     -Force
 Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $legacyProject) 'Deploy-GOverlayPlugin.ps1') `

@@ -2,7 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
 using DesktopShrine.Runtime;
+using DesktopShrine.Storage;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
@@ -53,19 +55,12 @@ if (!isFirstInstance)
 var dataDirectory = Environment.GetEnvironmentVariable(
     "DESKTOP_SHRINE_DATA_DIRECTORY");
 if (string.IsNullOrWhiteSpace(dataDirectory))
-{
-    dataDirectory = Path.Combine(
-        Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData),
-        "Desktop Shrine");
-}
+    dataDirectory = DesktopShrinePaths.Current.Root;
 
 var pluginConfigurationDirectory = Path.Combine(
     dataDirectory,
     "configuration",
     "plugins");
-SeedPluginConfiguration(pluginConfigurationDirectory);
-
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
     Args = args,
@@ -83,7 +78,11 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 builder.Logging.ClearProviders();
 builder.Logging.AddDebug();
 builder.Services.AddDesktopShrineRuntime(builder.Configuration);
-await builder.Build().RunAsync();
+using var host = builder.Build();
+host.Services.GetRequiredService<LocalAppDataMigration>()
+    .Migrate(DesktopShrinePaths.Current);
+SeedPluginConfiguration(pluginConfigurationDirectory);
+await host.RunAsync();
 
 static bool ShouldRunAsAdministrator()
 {

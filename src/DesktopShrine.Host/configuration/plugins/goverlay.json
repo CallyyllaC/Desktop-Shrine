@@ -4,10 +4,5 @@
   "WaterfallIntervalMilliseconds": 500,
   "WaterfallColumnWidthPixels": 8,
   "FontName": "Oxanium-Bold_20px.bin",
-  "CompatibilityMode": "Auto",
-  "MaximumCommandsPerRefresh": 48,
-  "MaximumArtworkBatchesPerRefresh": 4,
-  "MaximumDrawMilliseconds": 100,
-  "AudioRefreshDivisor": 1,
-  "ReconnectStabilizationMilliseconds": 1500
+  "DontUseDrawPixels": true
 }

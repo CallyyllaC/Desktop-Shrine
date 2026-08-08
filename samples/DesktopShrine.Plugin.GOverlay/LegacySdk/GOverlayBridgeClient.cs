@@ -89,17 +89,22 @@ internal sealed class GOverlayBridgeClient : IDisposable
                         previous = latest;
 
                     var next = GOverlayBridgeCodec.ReadFrame(pipe, previous);
-                    lock (stateGate)
-                    {
-                        latest = next;
-                        QueueWaterfall(next);
-                    }
+                    Accept(next);
                 }
             }
             catch (Exception) when (!stopping)
             {
                 Thread.Sleep(750);
             }
+        }
+    }
+
+    internal void Accept(GOverlayDashboardState state)
+    {
+        lock (stateGate)
+        {
+            latest = state;
+            QueueWaterfall(state);
         }
     }
 
@@ -137,15 +142,7 @@ internal sealed class GOverlayBridgeClient : IDisposable
         {
             Revision = source.Revision,
             RenderGeneration = source.RenderGeneration,
-            RenderCompatibilityMode = source.RenderCompatibilityMode,
-            DeviceFirmwareRevision = source.DeviceFirmwareRevision,
-            MaximumCommandsPerRefresh = source.MaximumCommandsPerRefresh,
-            MaximumArtworkBatchesPerRefresh =
-                source.MaximumArtworkBatchesPerRefresh,
-            MaximumDrawMilliseconds = source.MaximumDrawMilliseconds,
-            AudioRefreshDivisor = source.AudioRefreshDivisor,
-            ReconnectStabilizationMilliseconds =
-                source.ReconnectStabilizationMilliseconds,
+            DontUseDrawPixels = source.DontUseDrawPixels,
             IsAvailable = source.IsAvailable,
             PlaybackStatus = source.PlaybackStatus,
             Title = source.Title,

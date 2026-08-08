@@ -7,47 +7,66 @@ namespace DesktopShrine.Integration.Tests;
 public sealed class GOverlaySettingsTests
 {
     [Fact]
-    public void ReadsIpsCompatibilityBudgets()
+    public void DefaultsToAdaptiveRectangleArtwork()
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["CompatibilityMode"] = "IpsSafe",
-                ["MaximumCommandsPerRefresh"] = "40",
-                ["MaximumArtworkBatchesPerRefresh"] = "2",
-                ["MaximumDrawMilliseconds"] = "80",
-                ["AudioRefreshDivisor"] = "2",
-                ["ReconnectStabilizationMilliseconds"] = "2000"
-            })
-            .Build();
+        var configuration = new ConfigurationBuilder().Build();
 
         var settings = GOverlaySettings.FromConfiguration(configuration);
 
-        Assert.Equal("IpsSafe", settings.CompatibilityMode);
-        Assert.Equal(40, settings.MaximumCommandsPerRefresh);
-        Assert.Equal(2, settings.MaximumArtworkBatchesPerRefresh);
-        Assert.Equal(80, settings.MaximumDrawMilliseconds);
-        Assert.Equal(2, settings.AudioRefreshDivisor);
-        Assert.Equal(2000, settings.ReconnectStabilizationMilliseconds);
+        Assert.True(settings.DontUseDrawPixels);
     }
 
     [Theory]
-    [InlineData("CompatibilityMode", "unsafe")]
-    [InlineData("MaximumCommandsPerRefresh", "7")]
-    [InlineData("MaximumArtworkBatchesPerRefresh", "0")]
-    [InlineData("MaximumDrawMilliseconds", "9")]
-    [InlineData("AudioRefreshDivisor", "0")]
-    [InlineData("ReconnectStabilizationMilliseconds", "249")]
-    public void RejectsUnsafeRendererSettings(string key, string value)
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void ReadsDontUseDrawPixels(string value, bool expected)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                [key] = value
+                ["DontUseDrawPixels"] = value
             })
             .Build();
 
-        Assert.Throws<InvalidOperationException>(
-            () => GOverlaySettings.FromConfiguration(configuration));
+        Assert.Equal(
+            expected,
+            GOverlaySettings.FromConfiguration(configuration)
+                .DontUseDrawPixels);
+    }
+
+    [Theory]
+    [InlineData("IpsSafe", true)]
+    [InlineData("Auto", true)]
+    [InlineData("Standard", false)]
+    [InlineData("Normal", false)]
+    public void MigratesLegacyCompatibilitySetting(
+        string value,
+        bool expected)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["CompatibilityMode"] = value
+            })
+            .Build();
+
+        Assert.Equal(
+            expected,
+            GOverlaySettings.FromConfiguration(configuration)
+                .DontUseDrawPixels);
+    }
+
+    [Fact]
+    public void RejectsInvalidDontUseDrawPixels()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DontUseDrawPixels"] = "sometimes"
+            })
+            .Build();
+
+        Assert.Throws<InvalidOperationException>(() =>
+            GOverlaySettings.FromConfiguration(configuration));
     }
 }

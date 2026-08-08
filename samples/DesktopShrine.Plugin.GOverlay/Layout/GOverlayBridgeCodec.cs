@@ -4,7 +4,7 @@ namespace DesktopShrine.Plugin.GOverlay.Layout;
 
 public static class GOverlayBridgeCodec
 {
-    public const int ProtocolVersion = 9;
+    public const int ProtocolVersion = 10;
     private const int MaximumFrameBytes = 32 * 1024 * 1024;
     private const int MaximumHardwareMetrics = 16;
 
@@ -65,13 +65,7 @@ public static class GOverlayBridgeCodec
             writer.Write(state.VirtualMemorySummary ?? string.Empty);
             writer.Write(state.PhysicalMemoryLevel);
             writer.Write(state.VirtualMemoryLevel);
-            writer.Write((int)state.RenderCompatibilityMode);
-            writer.Write(state.DeviceFirmwareRevision ?? string.Empty);
-            writer.Write(state.MaximumCommandsPerRefresh);
-            writer.Write(state.MaximumArtworkBatchesPerRefresh);
-            writer.Write(state.MaximumDrawMilliseconds);
-            writer.Write(state.AudioRefreshDivisor);
-            writer.Write(state.ReconnectStabilizationMilliseconds);
+            writer.Write(state.DontUseDrawPixels);
         }
 
         using var header = new BinaryWriter(output, Encoding.UTF8, true);
@@ -189,21 +183,22 @@ public static class GOverlayBridgeCodec
                 }
             }
         }
-        if (version >= 9)
+        if (version == 9)
         {
-            var mode = frame.ReadInt32();
-            if (!Enum.IsDefined(typeof(GOverlayRenderCompatibilityMode), mode))
+            var legacyMode = frame.ReadInt32();
+            if (legacyMode is < 0 or > 1)
                 throw new InvalidDataException(
-                    "Invalid GOverlay render compatibility mode.");
-            state.RenderCompatibilityMode =
-                (GOverlayRenderCompatibilityMode)mode;
-            state.DeviceFirmwareRevision = frame.ReadString();
-            state.MaximumCommandsPerRefresh = frame.ReadInt32();
-            state.MaximumArtworkBatchesPerRefresh = frame.ReadInt32();
-            state.MaximumDrawMilliseconds = frame.ReadInt32();
-            state.AudioRefreshDivisor = frame.ReadInt32();
-            state.ReconnectStabilizationMilliseconds = frame.ReadInt32();
+                    "Invalid legacy GOverlay compatibility value.");
+            state.DontUseDrawPixels = legacyMode == 0;
+            _ = frame.ReadString();
+            _ = frame.ReadInt32();
+            _ = frame.ReadInt32();
+            _ = frame.ReadInt32();
+            _ = frame.ReadInt32();
+            _ = frame.ReadInt32();
         }
+        else if (version >= 10)
+            state.DontUseDrawPixels = frame.ReadBoolean();
 
         return state;
     }

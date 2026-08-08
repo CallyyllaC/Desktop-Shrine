@@ -12,6 +12,9 @@ internal sealed class GOverlaySdkSceneRenderer
     // GOverlay's own live-image renderer submits 40 pixels per USB request.
     // Larger requests are silently dropped by the LCDSysInfo 2.0 transport.
     private const int PixelBatchSize = 40;
+    // This is the established Draw_Pixels batching used by the TN device. It
+    // predates the removed renderer-wide pacing experiment.
+    private const int ArtworkBatchesPerRender = 4;
     private readonly Dictionary<string, string> fingerprints =
         new(StringComparer.Ordinal);
     private Task<PreparedArtwork>? artworkPreparation;
@@ -19,21 +22,19 @@ internal sealed class GOverlaySdkSceneRenderer
     private string requestedArtworkFingerprint = string.Empty;
     private string displayedArtworkFingerprint = string.Empty;
     private string failedArtworkFingerprint = string.Empty;
+    private bool requestedDontUseDrawPixels;
     private bool hasDisplayedArtwork;
     private long waterfallResetSequence = long.MinValue;
     private long waterfallColumnSequence = long.MinValue;
     private int waterfallWritePosition = -1;
     private float[] waterfallCursorBands = Array.Empty<float>();
-    private long nextPassId;
-    private DateTime lastPassCompletedUtc;
-    private DateTime unavailableUntilUtc;
-    private bool recovering;
-    private bool previousCompatibilityPassUsedArtwork;
-    private GOverlayRenderCompatibilityMode? activeCompatibilityMode;
-    private long connectionGeneration = -1;
+    private bool fullRedrawPending = true;
+    private string fullRedrawReason = "initial-state";
+    private long connectionGeneration = long.MinValue;
     private bool? devicePresent;
 
-    public void ResetForFullRedraw()
+    public void ResetForFullRedraw(
+        string reason = "render-generation-change")
     {
         fingerprints.Clear();
         artworkPreparation = null;
@@ -41,270 +42,310 @@ internal sealed class GOverlaySdkSceneRenderer
         requestedArtworkFingerprint = string.Empty;
         displayedArtworkFingerprint = string.Empty;
         failedArtworkFingerprint = string.Empty;
+        requestedDontUseDrawPixels = false;
         hasDisplayedArtwork = false;
         waterfallResetSequence = long.MinValue;
         waterfallColumnSequence = long.MinValue;
         waterfallWritePosition = -1;
         waterfallCursorBands = Array.Empty<float>();
+        fullRedrawPending = true;
+        fullRedrawReason = reason;
     }
 
     public long? Render(
         IHost host,
         GOverlayDashboardScene scene,
         GOverlayDashboardState state,
-        GOverlayUsbConnectionSnapshot connection,
         int cacheRuns,
-        Func<bool> isPriorityStateCurrent)
+        Func<bool> isPriorityStateCurrent,
+        GOverlayUsbConnectionSnapshot? connection = null)
     {
         // GOverlay resets cacheRuns to zero at its configured cache interval.
         // That is a hint to refresh cached values, not an indication that the
         // physical LCD was cleared. Clearing here caused a full-screen flash
         // and forced expensive artwork uploads on every reset.
         _ = cacheRuns;
+        ObserveConnectionGeneration(host, connection);
         var now = DateTime.UtcNow;
-        var compatibilityMode = state.RenderCompatibilityMode
-            == GOverlayRenderCompatibilityMode.IpsSafe;
-        if (activeCompatibilityMode != state.RenderCompatibilityMode)
-        {
-            activeCompatibilityMode = state.RenderCompatibilityMode;
-            ResetForFullRedraw();
-            host.DebugMessage(
-                $"Desktop Shrine - renderer compatibility={state.RenderCompatibilityMode} firmware={state.DeviceFirmwareRevision}; Interfaces.dll exposes no firmware API and USB REV is not treated as firmware");
-        }
-
-        if (connectionGeneration < 0)
-        {
-            connectionGeneration = connection.Generation;
-            devicePresent = connection.IsPresent;
-        }
-        else if (connection.Generation != connectionGeneration)
-        {
-            var previousPresence = devicePresent;
-            connectionGeneration = connection.Generation;
-            devicePresent = connection.IsPresent;
-            ResetForFullRedraw();
-            recovering = true;
-            if (connection.IsPresent == true)
-            {
-                unavailableUntilUtc = now.AddMilliseconds(
-                    state.ReconnectStabilizationMilliseconds);
-                host.DebugMessage(
-                    $"Desktop Shrine - device-state=reconnected source=usb-monitor generation={connection.Generation} changedAt={connection.ChangedAtUtc:O}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
-            }
-            else
-            {
-                unavailableUntilUtc = DateTime.MaxValue;
-                host.DebugMessage(
-                    $"Desktop Shrine - device-state=disconnected source=usb-monitor generation={connection.Generation} changedAt={connection.ChangedAtUtc:O} previousPresent={previousPresence}; pending physical work discarded");
-            }
-        }
-
-        var callbackGap = lastPassCompletedUtc == default
-            ? TimeSpan.Zero
-            : now - lastPassCompletedUtc;
-        var gapThreshold = TimeSpan.FromMilliseconds(Math.Max(
-            2000,
-            state.ReconnectStabilizationMilliseconds * 2));
-        if (compatibilityMode
-            && lastPassCompletedUtc != default
-            && callbackGap >= gapThreshold
-            && unavailableUntilUtc == default)
-        {
-            ResetForFullRedraw();
-            recovering = true;
-            unavailableUntilUtc = now.AddMilliseconds(
-                state.ReconnectStabilizationMilliseconds);
-            host.DebugMessage(
-                $"Desktop Shrine - device-state=disconnected inferredFrom=callback-gap gapMs={(long)callbackGap.TotalMilliseconds}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
-        }
-
         var pass = new GOverlaySdkRenderPass(
             host,
-            Interlocked.Increment(ref nextPassId),
-            compatibilityMode,
-            state.MaximumCommandsPerRefresh,
-            state.MaximumDrawMilliseconds);
+            GOverlayLcdCommandTrace.NextPassId());
+        var diagnosticCommands = scene.Regions
+            .SelectMany(region => region.Commands)
+            .ToArray();
+        var diagnosticArtwork = diagnosticCommands
+            .OfType<GOverlayArtworkCommand>()
+            .FirstOrDefault();
+        var diagnosticWaterfall = diagnosticCommands
+            .OfType<GOverlayWaterfallCommand>()
+            .FirstOrDefault();
+        var dirtyCommands = diagnosticCommands
+            .Where(command => command is not GOverlayArtworkCommand
+                && command is not GOverlayWaterfallCommand
+                && IsDirty(command))
+            .Select(command => new PrioritizedCommand(
+                command,
+                GOverlayRenderWorkPolicy.ForCommand(
+                    command,
+                    state.Mode,
+                    fullRedrawPending)))
+            .ToArray();
+        var artworkPriority = diagnosticArtwork is not null
+            && NeedsArtwork(diagnosticArtwork, state.DontUseDrawPixels)
+                ? PendingArtworkPriority(
+                    diagnosticArtwork,
+                    state.DontUseDrawPixels)
+                : (GOverlayRenderWorkPriority?)null;
+        var waterfallDirty = diagnosticWaterfall is not null
+            && NeedsWaterfall(diagnosticWaterfall);
+        pass.Start(
+            $"timestamp={now:O} insideDisplayOnLCD=true cacheRuns={cacheRuns} dashboardMode={state.Mode} dontUseDrawPixels={state.DontUseDrawPixels} revision={state.Revision} renderGeneration={state.RenderGeneration} fullRedraw={fullRedrawPending} fullRedrawReason={fullRedrawReason} sceneCommands={diagnosticCommands.Length} dirtyStatic={dirtyCommands.Length} artworkPresent={diagnosticArtwork?.HasArtwork == true} artworkDirty={artworkPriority.HasValue} artworkId={GOverlayLcdCommandTrace.ShortIdentifier(diagnosticArtwork?.ArtworkKey)} artworkSourceBytes={diagnosticArtwork?.ArtworkData.Length ?? 0} artworkPreparation={artworkPreparation?.Status.ToString() ?? "none"} artworkTransferPixel={artworkTransfer?.NextPixel ?? -1} artworkTransferStage={artworkTransfer?.NextRectangleStage ?? -1} artworkTransferStages={artworkTransfer?.RectanglePlan?.Stages.Count ?? -1} artworkTransferRectangles={artworkTransfer?.RectanglePlan?.TotalRectangleCommands ?? -1} audioDirty={waterfallDirty} audioHasColumn={diagnosticWaterfall?.HasColumn == true} audioResetSeq={diagnosticWaterfall?.ResetSequence ?? -1} audioColumnSeq={diagnosticWaterfall?.ColumnSequence ?? -1} audioWritePosition={diagnosticWaterfall?.WritePosition ?? -1}");
         host.DebugMessage(
-            $"Desktop Shrine - render pass {pass.Id} begin mode={state.RenderCompatibilityMode} firmware={state.DeviceFirmwareRevision} thread={Environment.CurrentManagedThreadId} insideDisplayOnLCD=true recovering={recovering}");
-
-        if (unavailableUntilUtc != default && now < unavailableUntilUtc)
-        {
-            host.DebugMessage(
-                $"Desktop Shrine - render pass {pass.Id} device-state=stabilizing; physical draw skipped until {unavailableUntilUtc:O}");
-            pass.Complete("stabilizing");
-            lastPassCompletedUtc = DateTime.UtcNow;
-            return null;
-        }
-        if (unavailableUntilUtc != default)
-        {
-            unavailableUntilUtc = default;
-            host.DebugMessage(
-                $"Desktop Shrine - render pass {pass.Id} device-state=reconnected; starting controlled staged redraw with audio suppressed");
-        }
+            $"Desktop Shrine - render pass {pass.Id} begin DontUseDrawPixels={state.DontUseDrawPixels} thread={Environment.CurrentManagedThreadId} insideDisplayOnLCD=true");
 
         try
         {
-            GOverlayArtworkCommand? artwork = null;
-            GOverlayWaterfallCommand? waterfall = null;
-            var staticChanged = false;
-            var staticDeferred = false;
-            foreach (var region in scene.Regions)
-            {
-                using var regionScope = pass.BeginRegion(region.Id);
-                foreach (var command in region.Commands)
-                {
-                    if (command is GOverlayArtworkCommand artworkCommand)
-                    {
-                        artwork = artworkCommand;
-                        continue;
-                    }
-                    if (command is GOverlayWaterfallCommand waterfallCommand)
-                    {
-                        waterfall = waterfallCommand;
-                        continue;
-                    }
+            long? renderedWaterfall = diagnosticWaterfall?.HasColumn == true
+                && diagnosticWaterfall.ColumnSequence
+                    <= waterfallColumnSequence
+                    ? diagnosticWaterfall.ColumnSequence
+                    : null;
+            var priorities = dirtyCommands
+                .Select(item => item.Priority)
+                .Concat(artworkPriority.HasValue
+                    ? new[] { artworkPriority.Value }
+                    : Array.Empty<GOverlayRenderWorkPriority>())
+                .Concat(waterfallDirty
+                    ? new[] { GOverlayRenderWorkPriority.LiveVisual }
+                    : Array.Empty<GOverlayRenderWorkPriority>())
+                .Distinct()
+                .OrderBy(priority => (int)priority)
+                .ToArray();
 
-                    if (!RenderChangedCommand(
-                            pass,
-                            command,
-                            scene,
-                            out var changed))
-                        staticDeferred = true;
-                    staticChanged |= changed;
-                }
-            }
-
-            var artworkPending = artwork is not null && NeedsArtwork(artwork);
-            var artworkCommands = 0;
-            if (artwork is not null && artworkPending)
+            foreach (var priority in priorities)
             {
-                var alternateWithAudio = compatibilityMode
-                    && !recovering
-                    && previousCompatibilityPassUsedArtwork
-                    && waterfall?.HasColumn == true;
-                if (staticChanged || staticDeferred || alternateWithAudio)
+                var commands = dirtyCommands
+                    .Where(item => item.Priority == priority)
+                    .Select(item => item.Command)
+                    .ToArray();
+                if (commands.Length > 0)
                 {
-                    var reason = alternateWithAudio
-                        ? "alternating expensive artwork with latest audio"
-                        : "static/full redraw has priority";
-                    host.DebugMessage(
-                        $"Desktop Shrine - render pass {pass.Id} region=artwork deferred reason={reason}");
+                    LogWorkSelection(
+                        host,
+                        pass,
+                        priority,
+                        state,
+                        $"commands={commands.Length}");
+                    foreach (var command in commands)
+                    {
+                        using (pass.UseRegion(
+                                   LogicalRegion(command, state.Mode)))
+                            RenderChangedCommand(pass, command, scene);
+                    }
                 }
-                else
+
+                if (artworkPriority == priority
+                    && diagnosticArtwork is not null)
                 {
-                    using var artworkScope = pass.BeginRegion("artwork");
-                    var before = pass.CommandCount;
-                    artworkPending = RenderArtwork(
+                    LogWorkSelection(
+                        host,
+                        pass,
+                        priority,
+                        state,
+                        $"generation={GOverlayLcdCommandTrace.ShortIdentifier(diagnosticArtwork.ArtworkKey)} stage={ArtworkStageNumber(priority)}");
+                    using var artworkScope = pass.BeginRegion("Artwork");
+                    _ = RenderArtwork(
                         pass,
                         host,
-                        artwork,
+                        diagnosticArtwork,
                         scene,
                         isPriorityStateCurrent,
-                        state.MaximumArtworkBatchesPerRefresh);
-                    artworkCommands = pass.CommandCount - before;
+                        state.DontUseDrawPixels);
+                }
+
+                if (priority == GOverlayRenderWorkPriority.LiveVisual
+                    && waterfallDirty
+                    && diagnosticWaterfall is not null)
+                {
+                    var previousRenderedRevision = waterfallColumnSequence
+                        == long.MinValue
+                            ? "none"
+                            : waterfallColumnSequence.ToString();
+                    var coalesced = waterfallColumnSequence != long.MinValue
+                        && diagnosticWaterfall.ColumnSequence
+                            > waterfallColumnSequence + 1;
+                    LogWorkSelection(
+                        host,
+                        pass,
+                        priority,
+                        state,
+                        $"revision={diagnosticWaterfall.ColumnSequence} previousRenderedRevision={previousRenderedRevision} coalesced={coalesced.ToString().ToLowerInvariant()}");
+                    using var waterfallScope = pass.BeginRegion("AudioMap");
+                    renderedWaterfall = RenderWaterfall(
+                        pass,
+                        diagnosticWaterfall);
                 }
             }
-
-            var suppressAudioReason = string.Empty;
-            if (compatibilityMode)
-            {
-                if (recovering)
-                    suppressAudioReason = "controlled base-screen recovery";
-                else if (staticChanged || staticDeferred)
-                    suppressAudioReason = "static/full redraw in this refresh";
-                else if (artworkCommands > 0)
-                    suppressAudioReason = "artwork transfer in this refresh";
-                else if (pass.BudgetExhausted)
-                    suppressAudioReason = "command/time budget exhausted";
-                else if (pass.Id % Math.Max(1, state.AudioRefreshDivisor) != 0)
-                    suppressAudioReason = "configured audio refresh divisor";
-            }
-
-            long? renderedWaterfall = null;
-            if (waterfall is not null && string.IsNullOrEmpty(suppressAudioReason))
-            {
-                using var waterfallScope = pass.BeginRegion("audio-map");
-                renderedWaterfall = RenderWaterfall(
-                    pass,
-                    waterfall,
-                    compatibilityMode);
-                if (waterfall.HasColumn && !renderedWaterfall.HasValue)
-                    suppressAudioReason = "command/time budget deferred audio atomically";
-            }
-            if (waterfall?.HasColumn == true
-                && !string.IsNullOrEmpty(suppressAudioReason))
-                host.DebugMessage(
-                    $"Desktop Shrine - render pass {pass.Id} audio skipped/deferred reason={suppressAudioReason}; newest frame retained, stale frames coalesced");
-
-            if (recovering && !staticDeferred && !artworkPending)
-            {
-                recovering = false;
-                host.DebugMessage(
-                    $"Desktop Shrine - render pass {pass.Id} device-state=stable base-screen-restored; audio resumes on a later refresh");
-            }
-
-            previousCompatibilityPassUsedArtwork = artworkCommands > 0;
-            pass.Complete(pass.BudgetExhausted ? "budget-deferred" : "complete");
-            lastPassCompletedUtc = DateTime.UtcNow;
+            fullRedrawPending = false;
+            fullRedrawReason = string.Empty;
+            pass.Complete("complete");
             return renderedWaterfall;
         }
         catch (GOverlayDeviceCommandException error)
         {
             pass.Complete("device-command-failed");
-            ResetForFullRedraw();
-            recovering = true;
-            unavailableUntilUtc = DateTime.UtcNow.AddMilliseconds(
-                state.ReconnectStabilizationMilliseconds);
-            lastPassCompletedUtc = DateTime.UtcNow;
+            ResetForFullRedraw("device-command-failed");
             host.DebugMessage(
-                $"Desktop Shrine - device-state=disconnected operation={error.Operation} region={error.Region} error={error.GetBaseException().Message}; pending physical work discarded; recoveryAfter={unavailableUntilUtc:O}");
+                $"Desktop Shrine - device command failed operation={error.Operation} region={error.Region} error={error.GetBaseException().Message}");
+            GOverlayLcdCommandTrace.Event(
+                "SdkFailure",
+                $"pass={pass.Id} operation={error.Operation} region={error.Region} exception={GOverlayLcdCommandTrace.Quote(error.ToString())}");
             return null;
         }
         catch (Exception error)
         {
             pass.Complete("renderer-failed");
-            lastPassCompletedUtc = DateTime.UtcNow;
             host.DebugMessage(
                 $"Desktop Shrine - render pass {pass.Id} failed without being swallowed: {error}");
             throw;
         }
     }
 
-    private bool NeedsArtwork(GOverlayArtworkCommand artwork)
+    private bool NeedsArtwork(
+        GOverlayArtworkCommand artwork,
+        bool dontUseDrawPixels)
     {
         return artwork.Fingerprint != requestedArtworkFingerprint
+            || dontUseDrawPixels != requestedDontUseDrawPixels
             || (artwork.HasArtwork
                 && artwork.Fingerprint != displayedArtworkFingerprint
                 && artwork.Fingerprint != failedArtworkFingerprint);
     }
 
-    private bool RenderChangedCommand(
+    private bool IsDirty(GOverlayDrawCommand command) =>
+        !fingerprints.TryGetValue(command.Key, out var fingerprint)
+        || fingerprint != command.Fingerprint;
+
+    private bool NeedsWaterfall(GOverlayWaterfallCommand waterfall) =>
+        waterfall.ResetSequence != waterfallResetSequence
+        || (waterfall.HasColumn
+            && waterfall.ColumnSequence > waterfallColumnSequence);
+
+    private GOverlayRenderWorkPriority PendingArtworkPriority(
+        GOverlayArtworkCommand artwork,
+        bool dontUseDrawPixels)
+    {
+        if (artwork.Fingerprint != requestedArtworkFingerprint
+            || dontUseDrawPixels != requestedDontUseDrawPixels
+            || artworkTransfer?.RectanglePlan is null)
+            return GOverlayRenderWorkPriority.ArtworkStage1;
+
+        var plan = artworkTransfer.RectanglePlan;
+        var stageIndex = artworkTransfer.NextRectangleStage;
+        while (stageIndex < plan.Stages.Count
+               && plan.Stages[stageIndex].Rectangles.Count == 0)
+            stageIndex++;
+
+        return GOverlayRenderWorkPolicy.ForArtworkStage(
+            Math.Min(stageIndex + 1, plan.Stages.Count));
+    }
+
+    private void ObserveConnectionGeneration(
+        IHost host,
+        GOverlayUsbConnectionSnapshot? connection)
+    {
+        if (connection is null)
+            return;
+
+        if (connectionGeneration == long.MinValue)
+        {
+            connectionGeneration = connection.Generation;
+            devicePresent = connection.IsPresent;
+            return;
+        }
+        if (connection.Generation == connectionGeneration)
+            return;
+
+        var previousPresence = devicePresent;
+        connectionGeneration = connection.Generation;
+        devicePresent = connection.IsPresent;
+        ResetForFullRedraw("device-generation-change");
+        var details =
+            $"generation={connection.Generation} present={connection.IsPresent} previousPresent={previousPresence} changedAt={connection.ChangedAtUtc:O}";
+        host.DebugMessage(
+            "Desktop Shrine - renderer device generation changed; "
+            + "pending work discarded; "
+            + details);
+        GOverlayLcdCommandTrace.Event(
+            "RendererDeviceGenerationChanged",
+            details);
+    }
+
+    private static int ArtworkStageNumber(
+        GOverlayRenderWorkPriority priority) =>
+        priority switch
+        {
+            GOverlayRenderWorkPriority.ArtworkStage2 => 2,
+            GOverlayRenderWorkPriority.ArtworkStage3 => 3,
+            GOverlayRenderWorkPriority.ArtworkStage4 => 4,
+            GOverlayRenderWorkPriority.ArtworkStage5 => 5,
+            _ => 1
+        };
+
+    private static void LogWorkSelection(
+        IHost host,
+        GOverlaySdkRenderPass pass,
+        GOverlayRenderWorkPriority priority,
+        GOverlayDashboardState state,
+        string details)
+    {
+        var message =
+            $"selected={priority} priority={(int)priority} renderGeneration={state.RenderGeneration} revision={state.Revision} {details}";
+        host.DebugMessage("Desktop Shrine - RENDER WORK " + message);
+        GOverlayLcdCommandTrace.Event(
+            "RenderWork",
+            $"pass={pass.Id} {message}");
+    }
+
+    private static string LogicalRegion(
+        GOverlayDrawCommand command,
+        GOverlayDashboardMode mode)
+    {
+        if (command is GOverlayProgressCommand)
+            return mode == GOverlayDashboardMode.Hardware
+                ? "Hardware"
+                : "Progress";
+        if (command is GOverlayMeterBarCommand)
+            return mode == GOverlayDashboardMode.Hardware
+                ? "Hardware"
+                : "Other";
+        if (command is GOverlayTextCommand)
+            return mode == GOverlayDashboardMode.Hardware
+                ? "Hardware"
+                : "MediaText";
+        if (command is GOverlayFillRectangleCommand
+            or GOverlayStrokeRectangleCommand
+            or GOverlayLineCommand)
+            return "Background/Layout";
+        return "Other";
+    }
+
+    private void RenderChangedCommand(
         GOverlaySdkRenderPass pass,
         GOverlayDrawCommand command,
-        GOverlayDashboardScene scene,
-        out bool changed)
+        GOverlayDashboardScene scene)
     {
         if (fingerprints.TryGetValue(
                 command.Key,
                 out var previous)
             && previous == command.Fingerprint)
         {
-            changed = false;
-            return true;
+            return;
         }
-
-        changed = false;
-        if (!pass.CanIssue(EstimatedCommandCount(command)))
-            return false;
 
         RenderCommand(pass, command, scene);
         fingerprints[command.Key] = command.Fingerprint;
-        changed = true;
-        return true;
     }
-
-    private static int EstimatedCommandCount(GOverlayDrawCommand command) =>
-        command is GOverlayMeterBarCommand or GOverlayProgressCommand ? 2 : 1;
 
     private static void RenderCommand(
         GOverlaySdkRenderPass pass,
@@ -352,15 +393,20 @@ internal sealed class GOverlaySdkSceneRenderer
         GOverlayArtworkCommand artwork,
         GOverlayDashboardScene scene,
         Func<bool> isPriorityStateCurrent,
-        int maximumArtworkBatches)
+        bool dontUseDrawPixels)
     {
-        if (artwork.Fingerprint != requestedArtworkFingerprint)
+        if (artwork.Fingerprint != requestedArtworkFingerprint
+            || dontUseDrawPixels != requestedDontUseDrawPixels)
         {
-            if ((!artwork.HasArtwork || !hasDisplayedArtwork)
-                && !pass.CanIssue(4))
-                return true;
-
+            if (artworkTransfer?.RectanglePlan is not null
+                && artworkTransfer.NextRectangleStage
+                    < artworkTransfer.RectanglePlan.Stages.Count)
+            {
+                host.DebugMessage(
+                    $"Desktop Shrine - abandoned artwork refinement artworkId={artworkTransfer.ArtworkId} completedStages={artworkTransfer.NextRectangleStage}/{artworkTransfer.RectanglePlan.Stages.Count}");
+            }
             requestedArtworkFingerprint = artwork.Fingerprint;
+            requestedDontUseDrawPixels = dontUseDrawPixels;
             failedArtworkFingerprint = string.Empty;
             artworkPreparation = null;
             artworkTransfer = null;
@@ -378,7 +424,8 @@ internal sealed class GOverlaySdkSceneRenderer
             if (!hasDisplayedArtwork)
                 Placeholder(pass, artwork, scene);
 
-            artworkPreparation = Task.Run(() => PrepareArtwork(artwork));
+            artworkPreparation = Task.Run(
+                () => PrepareArtwork(artwork, dontUseDrawPixels));
         }
 
         if (!artwork.HasArtwork
@@ -391,7 +438,9 @@ internal sealed class GOverlaySdkSceneRenderer
             if (artworkPreparation is null)
             {
                 artworkPreparation =
-                    Task.Run(() => PrepareArtwork(artwork));
+                    Task.Run(() => PrepareArtwork(
+                        artwork,
+                        dontUseDrawPixels));
                 host.DebugMessage(
                     "Desktop Shrine - recovered missing artwork preparation");
                 return true;
@@ -402,8 +451,6 @@ internal sealed class GOverlaySdkSceneRenderer
 
             if (artworkPreparation.IsFaulted)
             {
-                if (!pass.CanIssue(4))
-                    return true;
                 var error = artworkPreparation.Exception!
                     .GetBaseException()
                     .Message;
@@ -420,17 +467,76 @@ internal sealed class GOverlaySdkSceneRenderer
             if (!isPriorityStateCurrent())
                 return CancelArtworkTransfer(host);
 
-            if (!pass.CanIssue(2))
-                return true;
-
             artworkTransfer = artworkPreparation.Result;
             artworkPreparation = null;
             // A cancelled upload can leave pixels from several tracks in this
             // region. One cheap rectangle reset gives the replacement a clean
             // canvas without touching metadata, footer or waterfall history.
             Fill(pass, artwork.Bounds, artwork.Background);
+            if (dontUseDrawPixels)
+            {
+                var plan = artworkTransfer.RectanglePlan
+                    ?? throw new InvalidOperationException(
+                        "Prepared adaptive artwork has no rectangle plan.");
+                var stage5 = plan.Stages[
+                    AdaptiveArtworkRectangleCompressor.DefaultStageCount - 1];
+                var summary =
+                    $"ARTWORK RECTCOMP PLAN artworkId={artworkTransfer.ArtworkId} dontUseDrawPixels=true source={artworkTransfer.SourceWidth}x{artworkTransfer.SourceHeight} destination={artworkTransfer.Bounds.Width}x{artworkTransfer.Bounds.Height} stages={plan.Stages.Count} stageRectangles={string.Join(",", plan.Stages.Select(stage => stage.Rectangles.Count))} stageTotals={string.Join(",", plan.Stages.Select(stage => stage.CumulativeLeafCount))} stageTargets={string.Join(",", plan.Stages.Take(AdaptiveArtworkRectangleCompressor.DefaultNormalStageCount).Select(stage => stage.RectangleTarget))} stage5Eligible={plan.Stage5Eligible.ToString().ToLowerInvariant()} stage5Rectangles={stage5.Rectangles.Count} stage5Budget={plan.Stage5MaximumRectangles} stage5ErrorPerPixelThreshold={plan.Stage5ErrorPerPixelThreshold} remainingErrorAfterStage4={plan.RemainingErrorAfterStage4} remainingErrorAfterStage5={plan.RemainingErrorAfterStage5} minBlock={plan.MinimumBlockDimension} minBlockStage5={plan.Stage5MinimumBlockDimension} paletteColours={plan.PaletteColourCount} prepareMs={artworkTransfer.PrepareMilliseconds}";
+                host.DebugMessage("Desktop Shrine - " + summary);
+                GOverlayLcdCommandTrace.Event(
+                    "ArtworkRectangleCompression",
+                    $"pass={pass.Id} {summary}");
+            }
+            else
+            {
+                host.DebugMessage(
+                    $"Desktop Shrine - render pass {pass.Id} transferring {artworkTransfer.Bounds.Width}x{artworkTransfer.Bounds.Height} opaque artwork into {artwork.Bounds.Width}x{artwork.Bounds.Height} sourceBytes={artwork.ArtworkData.Length} preparedRgb565Bytes={artworkTransfer.Colours.Length * 2}");
+            }
+        }
+
+        if (dontUseDrawPixels)
+        {
+            var plan = artworkTransfer.RectanglePlan
+                ?? throw new InvalidOperationException(
+                    "Prepared adaptive artwork has no rectangle plan.");
+            SkipEmptyArtworkStages(host, artworkTransfer, plan);
+
+            if (artworkTransfer.NextRectangleStage < plan.Stages.Count)
+            {
+                var stage = plan.Stages[artworkTransfer.NextRectangleStage];
+                foreach (var rectangle in stage.Rectangles)
+                {
+                    if (!isPriorityStateCurrent())
+                        return CancelArtworkTransfer(host);
+                    pass.Rectangle(
+                        new GOverlayRectangle(
+                            artworkTransfer.Bounds.X + rectangle.X,
+                            artworkTransfer.Bounds.Y + rectangle.Y,
+                            rectangle.Width,
+                            rectangle.Height),
+                        ColourFromRgb565(rectangle.Colour));
+                    if (!isPriorityStateCurrent())
+                        return CancelArtworkTransfer(host);
+                }
+
+                LogArtworkStageRendered(
+                    host,
+                    artworkTransfer,
+                    stage,
+                    plan.Stages.Count);
+                artworkTransfer.NextRectangleStage++;
+                SkipEmptyArtworkStages(host, artworkTransfer, plan);
+            }
+
+            if (artworkTransfer.NextRectangleStage < plan.Stages.Count)
+                return true;
+
+            displayedArtworkFingerprint = artwork.Fingerprint;
+            hasDisplayedArtwork = true;
+            artworkTransfer = null;
             host.DebugMessage(
-                $"Desktop Shrine - render pass {pass.Id} transferring {artworkTransfer.Bounds.Width}x{artworkTransfer.Bounds.Height} opaque artwork into {artwork.Bounds.Width}x{artwork.Bounds.Height} sourceBytes={artwork.ArtworkData.Length} preparedRgb565Bytes={artworkTransfer.Colours.Length * 2}");
+                "Desktop Shrine - artwork rectangle transfer complete");
+            return false;
         }
 
         // Transfer a bounded slice at native GOverlay packet size. The next
@@ -438,8 +544,7 @@ internal sealed class GOverlaySdkSceneRenderer
         // the transfer between any two packets.
         var batches = 0;
         while (artworkTransfer.NextPixel < artworkTransfer.Colours.Length
-               && batches < Math.Max(1, maximumArtworkBatches)
-               && pass.CanIssue(1))
+               && batches < ArtworkBatchesPerRender)
         {
             if (!isPriorityStateCurrent())
                 return CancelArtworkTransfer(host);
@@ -447,6 +552,7 @@ internal sealed class GOverlaySdkSceneRenderer
             var count = Math.Min(
                 PixelBatchSize,
                 artworkTransfer.Colours.Length - artworkTransfer.NextPixel);
+            var batchStart = artworkTransfer.NextPixel;
             var pixels = new ArrayList(count);
             for (var index = 0; index < count; index++)
             {
@@ -460,7 +566,9 @@ internal sealed class GOverlaySdkSceneRenderer
                     artworkTransfer.Colours[pixelIndex]
                 });
             }
-            pass.Pixels(pixels);
+            pass.Pixels(
+                pixels,
+                $"component=Artwork artworkId={GOverlayLcdCommandTrace.ShortIdentifier(artwork.ArtworkKey)} contentType={GOverlayLcdCommandTrace.Quote(artwork.ContentType, 64)} sourceWidth={artworkTransfer.SourceWidth} sourceHeight={artworkTransfer.SourceHeight} sourceBytes={artwork.ArtworkData.Length} destinationX={artworkTransfer.Bounds.X} destinationY={artworkTransfer.Bounds.Y} destinationWidth={artworkTransfer.Bounds.Width} destinationHeight={artworkTransfer.Bounds.Height} targetWidth={artwork.Bounds.Width} targetHeight={artwork.Bounds.Height} pixelFormat=RGB565 opaque=true preparedRgb565Bytes={artworkTransfer.Colours.Length * 2L} batchIndex={batches} batchStartPixel={batchStart}");
             batches++;
 
             // The bridge receives new state on its own thread while this
@@ -479,6 +587,47 @@ internal sealed class GOverlaySdkSceneRenderer
         host.DebugMessage("Desktop Shrine - artwork transfer complete");
         return false;
     }
+
+    private static void LogArtworkStageRendered(
+        IHost host,
+        PreparedArtwork artwork,
+        ArtworkRectangleStage stage,
+        int stageCount)
+    {
+        if (!string.IsNullOrEmpty(stage.SkipReason))
+        {
+            host.DebugMessage(
+                $"Desktop Shrine - artwork stage {stage.Number} skipped reason={stage.SkipReason} artworkId={artwork.ArtworkId}");
+            return;
+        }
+        host.DebugMessage(
+            $"Desktop Shrine - artwork stage {stage.Number}/{stageCount} rendered rectangles={stage.Rectangles.Count} artworkId={artwork.ArtworkId}");
+    }
+
+    private static void SkipEmptyArtworkStages(
+        IHost host,
+        PreparedArtwork artwork,
+        ArtworkRectanglePlan plan)
+    {
+        while (artwork.NextRectangleStage < plan.Stages.Count
+               && plan.Stages[artwork.NextRectangleStage]
+                   .Rectangles.Count == 0)
+        {
+            LogArtworkStageRendered(
+                host,
+                artwork,
+                plan.Stages[artwork.NextRectangleStage],
+                plan.Stages.Count);
+            artwork.NextRectangleStage++;
+        }
+    }
+
+    /*
+     * The adaptive branch above intentionally advances one prepared, non-empty
+     * refinement stage per DisplayOnLCD invocation. It is image refinement,
+     * not a renderer command/time budget; all unrelated regions continue to
+     * render normally in the same callback.
+     */
 
     private bool CancelArtworkTransfer(IHost host)
     {
@@ -500,8 +649,10 @@ internal sealed class GOverlaySdkSceneRenderer
     }
 
     private static PreparedArtwork PrepareArtwork(
-        GOverlayArtworkCommand artwork)
+        GOverlayArtworkCommand artwork,
+        bool dontUseDrawPixels)
     {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         using var sourceStream = new MemoryStream(artwork.ArtworkData, false);
         using var source = Image.FromStream(sourceStream);
         var sourceBounds = FindArtworkContentBounds(source);
@@ -545,7 +696,25 @@ internal sealed class GOverlaySdkSceneRenderer
                     colour.B).Rgb565;
             }
 
-        return new(imageBounds, colours);
+        ArtworkRectanglePlan? rectanglePlan = null;
+        if (dontUseDrawPixels)
+        {
+            rectanglePlan =
+                AdaptiveArtworkRectangleCompressor.CreateProgressivePlan(
+                colours,
+                scaled.Width,
+                scaled.Height);
+        }
+
+        stopwatch.Stop();
+        return new(
+            imageBounds,
+            colours,
+            source.Width,
+            source.Height,
+            GOverlayLcdCommandTrace.ShortIdentifier(artwork.ArtworkKey),
+            rectanglePlan,
+            stopwatch.ElapsedMilliseconds);
     }
 
     private static Rectangle FindArtworkContentBounds(Image source)
@@ -800,14 +969,11 @@ internal sealed class GOverlaySdkSceneRenderer
 
     private long? RenderWaterfall(
         GOverlaySdkRenderPass pass,
-        GOverlayWaterfallCommand waterfall,
-        bool compatibilityMode)
+        GOverlayWaterfallCommand waterfall)
     {
-        var estimatedCommands = EstimateWaterfallCommands(
-            waterfall,
-            compatibilityMode);
-        if (!pass.CanIssue(estimatedCommands))
-            return null;
+        GOverlayLcdCommandTrace.Event(
+            "AudioMapFrame",
+            $"pass={pass.Id} thread={Environment.CurrentManagedThreadId} primitive=LCDSys2_Draw_Rectangle resetSequence={waterfall.ResetSequence} columnSequence={waterfall.ColumnSequence} writePosition={waterfall.WritePosition} columnWidth={waterfall.ColumnWidth} columnCount={waterfall.ColumnCount} bandCount={waterfall.Bands.Count} hasColumn={waterfall.HasColumn} boundsX={waterfall.Bounds.X} boundsY={waterfall.Bounds.Y} boundsWidth={waterfall.Bounds.Width} boundsHeight={waterfall.Bounds.Height}");
 
         if (waterfall.ResetSequence != waterfallResetSequence)
         {
@@ -828,7 +994,7 @@ internal sealed class GOverlaySdkSceneRenderer
             return waterfall.ColumnSequence;
 
         RestorePreviousWaterfallCursor(pass, waterfall);
-        ClearSkippedWaterfallColumns(pass, waterfall, compatibilityMode);
+        ClearSkippedWaterfallColumns(pass, waterfall);
         DrawWaterfallColumn(
             pass,
             waterfall,
@@ -893,8 +1059,7 @@ internal sealed class GOverlaySdkSceneRenderer
 
     private void ClearSkippedWaterfallColumns(
         GOverlaySdkRenderPass pass,
-        GOverlayWaterfallCommand waterfall,
-        bool compatibilityMode)
+        GOverlayWaterfallCommand waterfall)
     {
         if (waterfallColumnSequence == long.MinValue
             || waterfallWritePosition < 0
@@ -910,21 +1075,6 @@ internal sealed class GOverlaySdkSceneRenderer
             return;
         }
 
-        if (compatibilityMode)
-        {
-            foreach (var range in SkippedRanges(waterfall, sequenceDelta))
-                Fill(
-                    pass,
-                    new(
-                        waterfall.Bounds.X
-                            + (range.Start * waterfall.ColumnWidth),
-                        waterfall.Bounds.Y,
-                        range.Count * waterfall.ColumnWidth,
-                        waterfall.Bounds.Height),
-                    background);
-            return;
-        }
-
         foreach (var position in GOverlayWaterfallGeometry.SkippedPositions(
                      waterfallWritePosition,
                      sequenceDelta,
@@ -937,76 +1087,6 @@ internal sealed class GOverlaySdkSceneRenderer
                     waterfall.ColumnWidth,
                     waterfall.Bounds.Height),
                 background);
-    }
-
-    private int EstimateWaterfallCommands(
-        GOverlayWaterfallCommand waterfall,
-        bool compatibilityMode)
-    {
-        if (waterfall.ResetSequence != waterfallResetSequence)
-        {
-            // Resetting discards the previous cursor and sequence before the
-            // new column is drawn, so old-history restoration/skipped-column
-            // work must not be included in this atomic estimate.
-            return 1 + (waterfall.HasColumn
-                ? GOverlayWaterfallGeometry.BandCount + 1
-                : 0);
-        }
-
-        var count = 0;
-        if (!waterfall.HasColumn
-            || waterfall.ColumnSequence <= waterfallColumnSequence)
-            return count;
-
-        if (waterfallWritePosition >= 0 && waterfallCursorBands.Length > 0)
-            count += GOverlayWaterfallGeometry.BandCount;
-
-        if (waterfallColumnSequence != long.MinValue
-            && waterfall.ColumnSequence > waterfallColumnSequence + 1)
-        {
-            var delta = waterfall.ColumnSequence - waterfallColumnSequence;
-            if (delta >= waterfall.ColumnCount)
-                count++;
-            else if (compatibilityMode)
-                count += SkippedRanges(waterfall, delta).Count;
-            else
-                count += GOverlayWaterfallGeometry.SkippedPositions(
-                    waterfallWritePosition,
-                    delta,
-                    waterfall.ColumnCount).Count();
-        }
-
-        return count + GOverlayWaterfallGeometry.BandCount + 1;
-    }
-
-    private IReadOnlyList<(int Start, int Count)> SkippedRanges(
-        GOverlayWaterfallCommand waterfall,
-        long sequenceDelta)
-    {
-        var positions = GOverlayWaterfallGeometry.SkippedPositions(
-                waterfallWritePosition,
-                sequenceDelta,
-                waterfall.ColumnCount)
-            .ToArray();
-        if (positions.Length == 0)
-            return Array.Empty<(int, int)>();
-
-        var ranges = new List<(int Start, int Count)>();
-        var start = positions[0];
-        var count = 1;
-        for (var index = 1; index < positions.Length; index++)
-        {
-            if (positions[index] == positions[index - 1] + 1)
-            {
-                count++;
-                continue;
-            }
-            ranges.Add((start, count));
-            start = positions[index];
-            count = 1;
-        }
-        ranges.Add((start, count));
-        return ranges;
     }
 
     private static void Progress(
@@ -1035,6 +1115,11 @@ internal sealed class GOverlaySdkSceneRenderer
         GOverlayColour colour) =>
         pass.Rectangle(bounds, colour);
 
+    private static GOverlayColour ColourFromRgb565(int value) => new(
+        (byte)(((value >> 11) & 0x1f) * 255 / 31),
+        (byte)(((value >> 5) & 0x3f) * 255 / 63),
+        (byte)((value & 0x1f) * 255 / 31));
+
     private static void Line(
         GOverlaySdkRenderPass pass,
         GOverlayLineCommand line)
@@ -1055,10 +1140,29 @@ internal sealed class GOverlaySdkSceneRenderer
 
     private sealed class PreparedArtwork(
         GOverlayRectangle bounds,
-        int[] colours)
+        int[] colours,
+        int sourceWidth,
+        int sourceHeight,
+        string artworkId,
+        ArtworkRectanglePlan? rectanglePlan,
+        long prepareMilliseconds)
     {
         public GOverlayRectangle Bounds { get; } = bounds;
         public int[] Colours { get; } = colours;
+        public int SourceWidth { get; } = sourceWidth;
+        public int SourceHeight { get; } = sourceHeight;
+        public string ArtworkId { get; } = artworkId;
+        public ArtworkRectanglePlan? RectanglePlan { get; } = rectanglePlan;
+        public long PrepareMilliseconds { get; } = prepareMilliseconds;
         public int NextPixel { get; set; }
+        public int NextRectangleStage { get; set; }
+    }
+
+    private sealed class PrioritizedCommand(
+        GOverlayDrawCommand command,
+        GOverlayRenderWorkPriority priority)
+    {
+        public GOverlayDrawCommand Command { get; } = command;
+        public GOverlayRenderWorkPriority Priority { get; } = priority;
     }
 }

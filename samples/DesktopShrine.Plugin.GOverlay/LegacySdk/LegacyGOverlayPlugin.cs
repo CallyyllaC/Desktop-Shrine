@@ -24,6 +24,7 @@ public sealed class LegacyGOverlayPlugin : IPlugin
     private IHost? host;
     private long renderedGeneration = long.MinValue;
     private bool initialized;
+    private bool traceStatusReportedDuringDisplay;
     private GOverlayDashboardState? pendingDisplayState;
 
     internal static string CurrentFontName { get; private set; } =
@@ -37,6 +38,10 @@ public sealed class LegacyGOverlayPlugin : IPlugin
     public void Initialize(IHost value)
     {
         host = value;
+        GOverlayLcdCommandTrace.EnsureInitialized(value);
+        GOverlayLcdCommandTrace.Event(
+            "PluginInitialize",
+            $"thread={Environment.CurrentManagedThreadId} plugin={GOverlayLcdCommandTrace.Quote(PluginDisplayName)}");
 
         if (initialized)
             return;
@@ -53,8 +58,15 @@ public sealed class LegacyGOverlayPlugin : IPlugin
         {
             // This is GOverlay's state-production phase. Snapshot only; all
             // physical SDK calls remain in LCDSys2_DisplayOnLCD.
+            GOverlayDashboardState snapshot;
             lock (snapshotGate)
-                pendingDisplayState = bridge.ForDisplay;
+            {
+                snapshot = bridge.ForDisplay;
+                pendingDisplayState = snapshot;
+            }
+            GOverlayLcdCommandTrace.Event(
+                "WillRequestValues",
+                $"thread={Environment.CurrentManagedThreadId} snapshotRevision={snapshot.Revision} renderGeneration={snapshot.RenderGeneration} waterfallColumnSequence={snapshot.WaterfallColumnSequence}");
         }
         return new() { ["value"] = 0 };
     }
@@ -122,6 +134,11 @@ public sealed class LegacyGOverlayPlugin : IPlugin
         // so even a re-entrant host callback cannot overlap USB commands.
         lock (RenderGate)
         {
+            if (!traceStatusReportedDuringDisplay)
+            {
+                GOverlayLcdCommandTrace.EnsureInitialized(host);
+                traceStatusReportedDuringDisplay = true;
+            }
             GOverlayDashboardState state;
             lock (snapshotGate)
             {
@@ -130,7 +147,7 @@ public sealed class LegacyGOverlayPlugin : IPlugin
             }
             if (state.RenderGeneration != renderedGeneration)
             {
-                renderer.ResetForFullRedraw();
+                renderer.ResetForFullRedraw("render-generation-change");
                 renderedGeneration = state.RenderGeneration;
             }
             CurrentFontName = string.IsNullOrWhiteSpace(state.FontName)
@@ -142,9 +159,9 @@ public sealed class LegacyGOverlayPlugin : IPlugin
                 host,
                 scene,
                 state,
-                connectionMonitor.Snapshot,
                 cacheRuns,
-                () => artworkState.Matches(bridge.Latest));
+                () => artworkState.Matches(bridge.Latest),
+                connectionMonitor.Snapshot);
             if (renderedWaterfallSequence.HasValue)
             {
                 bridge.AcknowledgeWaterfall(
@@ -161,6 +178,9 @@ public sealed class LegacyGOverlayPlugin : IPlugin
         private readonly GOverlayColour dark;
         private readonly GOverlayColour light;
         private readonly string artworkKey;
+        private readonly long renderGeneration;
+        private readonly GOverlayDashboardMode mode;
+        private readonly bool dontUseDrawPixels;
 
         private ArtworkTransferState(GOverlayDashboardState state)
         {
@@ -168,6 +188,9 @@ public sealed class LegacyGOverlayPlugin : IPlugin
             dark = state.Dark;
             light = state.Light;
             artworkKey = state.ArtworkKey;
+            renderGeneration = state.RenderGeneration;
+            mode = state.Mode;
+            dontUseDrawPixels = state.DontUseDrawPixels;
         }
 
         public static ArtworkTransferState Capture(
@@ -178,6 +201,9 @@ public sealed class LegacyGOverlayPlugin : IPlugin
             isAvailable == state.IsAvailable
             && dark.Equals(state.Dark)
             && light.Equals(state.Light)
-            && artworkKey == state.ArtworkKey;
+            && artworkKey == state.ArtworkKey
+            && renderGeneration == state.RenderGeneration
+            && mode == state.Mode
+            && dontUseDrawPixels == state.DontUseDrawPixels;
     }
 }

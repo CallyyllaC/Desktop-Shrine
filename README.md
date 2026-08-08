@@ -83,12 +83,10 @@ After installing GOverlay and the Desktop Shrine bridge:
 The GOverlay output should then be available to display media, game, and
 hardware information published by Desktop Shrine.
 
-`CompatibilityMode` in `configuration/plugins/goverlay.json` defaults to
-`Auto`. The legacy GOverlay plugin API does not expose the LCDSysInfo2 firmware
-revision, so `Auto` uses the bounded IPS-safe renderer. Owners of a confirmed
-FW246/TN unit can select `Standard` to retain the original unbudgeted scheduling;
-`IpsSafe` forces staged redraws. The same file exposes command, artwork-batch,
-draw-time, audio-rate, and reconnect-stabilization budgets.
+`DontUseDrawPixels` in `configuration/plugins/goverlay.json` defaults to `true`.
+In that mode album artwork is prepared as a bounded adaptive set of filled
+rectangles; all other drawing uses the normal renderer. Set it to `false` for a
+device known to support the original `LCDSys2_Draw_Pixels` artwork transfer.
 
 ## Configuration
 

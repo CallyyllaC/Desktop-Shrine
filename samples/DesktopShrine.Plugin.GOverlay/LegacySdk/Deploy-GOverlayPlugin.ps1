@@ -25,7 +25,9 @@ $filesToCopy = @(
     "$PluginAssemblyName.dll",
     "$PluginAssemblyName.pdb",
     'DesktopShrine.Plugin.GOverlay.Layout.dll',
-    'DesktopShrine.Plugin.GOverlay.Layout.pdb'
+    'DesktopShrine.Plugin.GOverlay.Layout.pdb',
+    'DesktopShrine.Storage.dll',
+    'DesktopShrine.Storage.pdb'
 )
 
 function Copy-PluginFiles {

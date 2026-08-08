@@ -189,14 +189,7 @@ public sealed class GOverlayLayoutTests
         original.PositiveRatingCount = 12_345;
         original.NegativeRatingCount = 678;
         original.RatingSummary = "Very Positive";
-        original.RenderCompatibilityMode =
-            GOverlayRenderCompatibilityMode.IpsSafe;
-        original.DeviceFirmwareRevision = "251";
-        original.MaximumCommandsPerRefresh = 44;
-        original.MaximumArtworkBatchesPerRefresh = 3;
-        original.MaximumDrawMilliseconds = 90;
-        original.AudioRefreshDivisor = 2;
-        original.ReconnectStabilizationMilliseconds = 1750;
+        original.DontUseDrawPixels = true;
         using var firstFrame = new MemoryStream();
         GOverlayBridgeCodec.WriteFrame(
             firstFrame,
@@ -237,15 +230,26 @@ public sealed class GOverlayLayoutTests
         Assert.Equal(
             original.NegativeRatingCount,
             first.NegativeRatingCount);
+        Assert.True(first.DontUseDrawPixels);
+    }
+
+    [Fact]
+    public void ArtworkTransferFlagDoesNotChangeLayoutMediaHardwareOrAudio()
+    {
+        var layout = new GOverlayDashboardLayout();
+        var firstState = SampleState();
+        firstState.DontUseDrawPixels = false;
+        var secondState = SampleState();
+        secondState.DontUseDrawPixels = true;
+
+        var first = layout.Compose(firstState, DateTime.UnixEpoch);
+        var second = layout.Compose(secondState, DateTime.UnixEpoch);
+
         Assert.Equal(
-            original.RenderCompatibilityMode,
-            first.RenderCompatibilityMode);
-        Assert.Equal("251", first.DeviceFirmwareRevision);
-        Assert.Equal(44, first.MaximumCommandsPerRefresh);
-        Assert.Equal(3, first.MaximumArtworkBatchesPerRefresh);
-        Assert.Equal(90, first.MaximumDrawMilliseconds);
-        Assert.Equal(2, first.AudioRefreshDivisor);
-        Assert.Equal(1750, first.ReconnectStabilizationMilliseconds);
+            first.Regions.SelectMany(region => region.Commands)
+                .Select(command => command.Fingerprint),
+            second.Regions.SelectMany(region => region.Commands)
+                .Select(command => command.Fingerprint));
     }
 
     [Fact]

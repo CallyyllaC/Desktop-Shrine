@@ -112,14 +112,7 @@ public sealed class GOverlayPlugin : IOutputPlugin
     {
         token.ThrowIfCancellationRequested();
         var devices = WindowsGOverlayDeviceDetector.FindConnected();
-        var renderMode = ResolveRenderCompatibility(
-            devices,
-            out var firmwareRevision,
-            out var compatibilityReason);
-        state!.ConfigureRenderer(
-            renderMode,
-            firmwareRevision,
-            settings);
+        state!.ConfigureArtwork(settings.DontUseDrawPixels);
         bridge!.Start(token);
         bridge.Update(state.Current);
 
@@ -141,50 +134,10 @@ public sealed class GOverlayPlugin : IOutputPlugin
                     device.UsbHardwareRevision ?? "unknown");
         }
         logger!.LogInformation(
-            "GOverlay LCDSys2 renderer mode {RenderMode}: {Reason}",
-            renderMode,
-            compatibilityReason);
+            "Desktop Shrine - GOverlay DontUseDrawPixels={DontUseDrawPixels}",
+            settings.DontUseDrawPixels);
 
         return ValueTask.CompletedTask;
-    }
-
-    private GOverlayRenderCompatibilityMode ResolveRenderCompatibility(
-        IReadOnlyList<GOverlayDevice> devices,
-        out string firmwareRevision,
-        out string reason)
-    {
-        var revisions = devices
-            .Where(device =>
-                device.Specification.Model == GOverlayDeviceModel.LcdSysInfo35)
-            .Select(device => device.UsbHardwareRevision)
-            .ToArray();
-        // USB REV is the USB descriptor revision (observed as REV_0100 on both
-        // panel generations), not the LCDSysInfo firmware reported by GOverlay.
-        firmwareRevision = "unavailable";
-
-        if (settings.CompatibilityMode.Equals(
-                "Standard",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            reason = "forced by configuration";
-            return GOverlayRenderCompatibilityMode.Standard;
-        }
-        if (settings.CompatibilityMode.Equals(
-                "IpsSafe",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            reason = "forced by configuration";
-            return GOverlayRenderCompatibilityMode.IpsSafe;
-        }
-
-        // Interfaces.dll exposes drawing calls but no firmware or connection
-        // metadata, and USB REV does not distinguish FW246 from FW251. Auto
-        // therefore takes the bounded path; users can explicitly select
-        // Standard after confirming an older unit.
-        reason = revisions.Length == 0
-            ? "firmware unavailable; using bounded compatibility fallback"
-            : "firmware unavailable (USB REV is not firmware); using bounded compatibility fallback";
-        return GOverlayRenderCompatibilityMode.IpsSafe;
     }
 
     public async ValueTask StopAsync(CancellationToken token)

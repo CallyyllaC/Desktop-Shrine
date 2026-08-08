@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using DesktopShrine.Storage;
 
 namespace DesktopShrine.Plugin.SteamNowPlaying;
 
@@ -19,17 +20,11 @@ internal sealed record SteamNowPlayingSettings
     public static SteamNowPlayingSettings FromConfiguration(
         IConfiguration configuration)
     {
-        var defaultCache = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DesktopShrine",
-            "steam-now-playing",
-            "artwork");
+        var defaultCache =
+            DesktopShrinePaths.Current.SteamArtworkCacheDirectory;
         var configuredCache = configuration["ArtworkCacheDirectory"];
-        var defaultMetadataCache = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DesktopShrine",
-            "steam-now-playing",
-            "metadata");
+        var defaultMetadataCache =
+            DesktopShrinePaths.Current.SteamMetadataCacheDirectory;
         var configuredMetadataCache =
             configuration["StoreMetadataCacheDirectory"];
 

@@ -13,12 +13,7 @@ internal sealed record GOverlaySettings
     public string FontName { get; init; } = "Oxanium-Bold_20px.bin";
     public int WaterfallColumnWidth { get; init; } =
         GOverlayWaterfallGeometry.ColumnWidth;
-    public string CompatibilityMode { get; init; } = "Auto";
-    public int MaximumCommandsPerRefresh { get; init; } = 48;
-    public int MaximumArtworkBatchesPerRefresh { get; init; } = 4;
-    public int MaximumDrawMilliseconds { get; init; } = 100;
-    public int AudioRefreshDivisor { get; init; } = 1;
-    public int ReconnectStabilizationMilliseconds { get; init; } = 1500;
+    public bool DontUseDrawPixels { get; init; } = true;
     public GOverlayWaterfallOptions Waterfall { get; init; } = new();
 
     public TimeSpan UpdateInterval =>
@@ -42,30 +37,7 @@ internal sealed record GOverlaySettings
             configuration,
             "WaterfallColumnWidthPixels",
             GOverlayWaterfallGeometry.ColumnWidth);
-        var compatibilityMode = string.IsNullOrWhiteSpace(
-            configuration["CompatibilityMode"])
-            ? "Auto"
-            : configuration["CompatibilityMode"]!;
-        var maximumCommands = ReadInt(
-            configuration,
-            "MaximumCommandsPerRefresh",
-            48);
-        var maximumArtworkBatches = ReadInt(
-            configuration,
-            "MaximumArtworkBatchesPerRefresh",
-            4);
-        var maximumDrawMilliseconds = ReadInt(
-            configuration,
-            "MaximumDrawMilliseconds",
-            100);
-        var audioRefreshDivisor = ReadInt(
-            configuration,
-            "AudioRefreshDivisor",
-            1);
-        var reconnectStabilizationMilliseconds = ReadInt(
-            configuration,
-            "ReconnectStabilizationMilliseconds",
-            1500);
+        var dontUseDrawPixels = ReadDontUseDrawPixels(configuration);
         var waterfall = new GOverlayWaterfallOptions
         {
             NoiseFloorDb = ReadDouble(
@@ -109,41 +81,42 @@ internal sealed record GOverlaySettings
         if (waterfallColumnWidth is < 1 or > 16)
             throw new InvalidOperationException(
                 "WaterfallColumnWidthPixels must be between 1 and 16.");
-        if (!compatibilityMode.Equals("Auto", StringComparison.OrdinalIgnoreCase)
-            && !compatibilityMode.Equals("Standard", StringComparison.OrdinalIgnoreCase)
-            && !compatibilityMode.Equals("IpsSafe", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(
-                "CompatibilityMode must be Auto, Standard, or IpsSafe.");
-        if (maximumCommands is < 36 or > 512)
-            throw new InvalidOperationException(
-                "MaximumCommandsPerRefresh must be between 36 and 512 so one audio-map update remains atomic.");
-        if (maximumArtworkBatches is < 1 or > 32)
-            throw new InvalidOperationException(
-                "MaximumArtworkBatchesPerRefresh must be between 1 and 32.");
-        if (maximumDrawMilliseconds is < 10 or > 5000)
-            throw new InvalidOperationException(
-                "MaximumDrawMilliseconds must be between 10 and 5000.");
-        if (audioRefreshDivisor is < 1 or > 20)
-            throw new InvalidOperationException(
-                "AudioRefreshDivisor must be between 1 and 20.");
-        if (reconnectStabilizationMilliseconds is < 250 or > 30000)
-            throw new InvalidOperationException(
-                "ReconnectStabilizationMilliseconds must be between 250 and 30000.");
-
         return new()
         {
             PipeName = pipeName,
             UpdatesPerSecond = updatesPerSecond,
             FontName = fontName,
             WaterfallColumnWidth = waterfallColumnWidth,
-            CompatibilityMode = compatibilityMode,
-            MaximumCommandsPerRefresh = maximumCommands,
-            MaximumArtworkBatchesPerRefresh = maximumArtworkBatches,
-            MaximumDrawMilliseconds = maximumDrawMilliseconds,
-            AudioRefreshDivisor = audioRefreshDivisor,
-            ReconnectStabilizationMilliseconds = reconnectStabilizationMilliseconds,
+            DontUseDrawPixels = dontUseDrawPixels,
             Waterfall = waterfall
         };
+    }
+
+    private static bool ReadDontUseDrawPixels(
+        IConfiguration configuration)
+    {
+        var configured = configuration["DontUseDrawPixels"];
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            if (bool.TryParse(configured, out var parsed))
+                return parsed;
+            throw new InvalidOperationException(
+                "DontUseDrawPixels must be true or false.");
+        }
+
+        // Migrate the retired setting in memory for existing installations.
+        // New configuration only writes DontUseDrawPixels.
+        var legacy = configuration["CompatibilityMode"];
+        if (string.IsNullOrWhiteSpace(legacy)
+            || legacy.Equals("Auto", StringComparison.OrdinalIgnoreCase)
+            || legacy.Equals("IpsSafe", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (legacy.Equals("Standard", StringComparison.OrdinalIgnoreCase)
+            || legacy.Equals("Normal", StringComparison.OrdinalIgnoreCase)
+            || legacy.Equals("Default", StringComparison.OrdinalIgnoreCase))
+            return false;
+        throw new InvalidOperationException(
+            "Legacy CompatibilityMode must be Auto, IpsSafe, Standard, Normal, or Default.");
     }
 
     private static double ReadDouble(

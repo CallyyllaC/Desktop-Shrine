@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/DesktopShrine.Abstractions/DesktopShrine.Abstractions.csproj"/>
+    <ProjectReference Include="../../src/DesktopShrine.Storage/DesktopShrine.Storage.csproj"/>
     <ProjectReference Include="../../contracts/DesktopShrine.Contracts.Media/DesktopShrine.Contracts.Media.csproj"/>
     <PackageReference Include="System.Drawing.Common" Version="10.0.3"/>
   </ItemGroup>

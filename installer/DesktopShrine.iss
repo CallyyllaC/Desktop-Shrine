@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.1.0"
 #endif
 #ifndef PublishRoot
   #error PublishRoot must be supplied by Build-WindowsInstaller.ps1
@@ -14,6 +14,7 @@
 #define MyAppName "Desktop Shrine"
 #define MyAppExeName "DesktopShrine.Host.exe"
 #define StartupTaskName "Desktop Shrine"
+#define LocalAppDataDirectoryName "DesktopShrine"
 #define GOverlayMsiUri "https://www.goverlay.com/downloads/lcdsysinfo/GOverlaySetup.msi"
 #define GOverlayMsiSha256 "7F0B3EBF8422D4D68402B3789944EC8CB9D401E3756751FEEB2AC3AB48F3B5E4"
 
@@ -56,7 +57,7 @@ Source: "{#RepositoryRoot}\third-party-licenses\Oxanium-OFL-1.1.txt"; DestDir: "
 
 [Icons]
 Name: "{group}\Desktop Shrine"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--launch"; WorkingDir: "{app}"
-Name: "{group}\Desktop Shrine configuration"; Filename: "{localappdata}\Desktop Shrine\configuration"
+Name: "{group}\Desktop Shrine configuration"; Filename: "{localappdata}\{#LocalAppDataDirectoryName}\configuration"
 Name: "{group}\Uninstall Desktop Shrine"; Filename: "{uninstallexe}"
 
 [Registry]
@@ -79,6 +80,7 @@ Type: files; Name: "{code:GetGOverlayDirectory}\Plugins\DesktopShrine.Plugin.GOv
 Type: files; Name: "{code:GetGOverlayDirectory}\Plugins\DesktopShrine.Plugin.GOverlay.LegacySdk.Debug.dll"
 Type: files; Name: "{code:GetGOverlayDirectory}\Plugins\DesktopShrine.Plugin.GOverlay.LegacySdk.Release.dll"
 Type: files; Name: "{code:GetGOverlayDirectory}\Plugins\DesktopShrine.Plugin.GOverlay.Layout.dll"
+Type: files; Name: "{code:GetGOverlayDirectory}\Plugins\DesktopShrine.Storage.dll"
 
 [Code]
 function IsTaskSelected(const Description: String): Boolean;
