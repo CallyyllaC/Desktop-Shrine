@@ -207,6 +207,8 @@ public sealed class LiveConfigurationAndDeliveryTests
             new EmptyConfigurationProvider(),
             profiles,
             new NoOpApplicationControl(),
+            new OutputShutdownCoordinator(
+                NullLogger<OutputShutdownCoordinator>.Instance),
             NullLoggerFactory.Instance,
             NullLogger<PluginLifecycleManager>.Instance);
         lifecycle.Add(loaded);

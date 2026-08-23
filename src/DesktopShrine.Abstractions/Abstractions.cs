@@ -126,6 +126,11 @@ public interface IInputPlugin : IShrinePlugin
     }
 }
 public interface IOutputPlugin : IShrinePlugin { IReadOnlyCollection<RequiredPortDescriptor> RequiredPorts { get; } }
+public interface IShutdownOutputParticipant
+{
+    void MuteOutputForShutdown();
+    void BlackoutForShutdown();
+}
 public enum ApplicationShutdownKind
 {
     Exit,

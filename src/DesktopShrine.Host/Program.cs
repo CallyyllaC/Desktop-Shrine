@@ -113,7 +113,7 @@ using (var host = builder.Build())
             host.Services.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("WindowsSession")
                 .LogInformation(
-                    "Windows session ending ({Reason}); beginning shared Desktop Shrine shutdown",
+                    "Windows session ending: {Reason}",
                     eventArgs.Reason);
             shutdown.RequestShutdown(ApplicationShutdownKind.Exit);
         };

@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
                 FromApplicationDirectory(options.OutputProfileFile);
         });
         services.AddSingleton<IContractRegistry, ContractRegistry>();
+        services.AddSingleton<OutputShutdownCoordinator>();
         services.AddSingleton<ApplicationShutdownCoordinator>();
         services.AddSingleton<IApplicationControl>(provider =>
             provider.GetRequiredService<ApplicationShutdownCoordinator>());

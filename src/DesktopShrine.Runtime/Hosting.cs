@@ -323,6 +323,7 @@ internal sealed class PluginLifecycleManager(
     IPluginConfigurationProvider configs,
     IOutputInputProfileService profiles,
     IApplicationControl applicationControl,
+    OutputShutdownCoordinator outputShutdown,
     ILoggerFactory logs,
     ILogger<PluginLifecycleManager> logger) : IPluginLifecycleManager
 {
@@ -330,7 +331,12 @@ internal sealed class PluginLifecycleManager(
     private readonly List<LoadedPlugin> started = [];
     private readonly Dictionary<string, PluginContext> contexts = [];
     public IReadOnlyCollection<LoadedPlugin> Plugins => plugins.ToArray();
-    public void Add(LoadedPlugin p) => plugins.Add(p);
+    public void Add(LoadedPlugin p)
+    {
+        plugins.Add(p);
+        if (p.Instance is IShutdownOutputParticipant shutdownOutput)
+            outputShutdown.Register(shutdownOutput);
+    }
 
     public async ValueTask InitialiseAllAsync(CancellationToken token)
     {

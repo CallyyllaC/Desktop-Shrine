@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using Xunit;
 
 namespace DesktopShrine.Integration.Tests;
@@ -89,6 +90,88 @@ public sealed class BlinkStickBarTests
             await WaitUntilAsync(
                 () => hardware.HasFrame(channel: 2, byteCount: 48 * 4));
             Assert.Equal(1, hardware.ConnectCount);
+        }
+        finally
+        {
+            if (started)
+                await plugin.StopAsync(CancellationToken.None);
+            await plugin.DisposeAsync();
+            context?.Dispose();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+        Assert.True(hardware.WasClearedBeforeDispose);
+    }
+
+    [Fact]
+    public async Task NormalStartupIsUnmutedAndShutdownMuteCannotBeOverridden()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"desktop-shrine-blackout-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var fileName = Path.Combine(directory, "blinkstick-bar.json");
+        await File.WriteAllTextAsync(
+            fileName,
+            """
+            {
+              "LedCount": 24,
+              "DataChannel": 1,
+              "ExternalPower": true,
+              "Brightness": 0.37,
+              "Gamma": 1.7,
+              "IdleBrightness": 0.5,
+              "AnimationFramesPerSecond": 60
+            }
+            """,
+            TestContext.Current.CancellationToken);
+
+        var hardware = new RecordingBlinkStickHardware();
+        var plugin = new BlinkStickBarPlugin(() => hardware);
+        PluginContext? context = null;
+        var started = false;
+        try
+        {
+            var provider = new PluginConfigurationProvider(
+                new ConfigurationBuilder().Build(),
+                Options.Create(new DesktopShrineOptions
+                {
+                    PluginConfigurationDirectory = directory
+                }),
+                NullLogger<PluginConfigurationProvider>.Instance);
+            context = new PluginContext(
+                "blinkstick-bar",
+                provider.GetConfiguration("blinkstick-bar"),
+                NullLoggerFactory.Instance,
+                new NoOpPublisher(),
+                new NoOpSubscriber(),
+                inputProfile: null);
+
+            await plugin.InitialiseAsync(
+                context,
+                TestContext.Current.CancellationToken);
+            await plugin.StartAsync(TestContext.Current.CancellationToken);
+            started = true;
+            await WaitUntilAsync(() => hardware.HasLitFrame);
+
+            plugin.MuteOutputForShutdown();
+            hardware.ResetFrames();
+            plugin.BlackoutForShutdown();
+            plugin.BlackoutForShutdown();
+
+            await plugin.StartAsync(TestContext.Current.CancellationToken);
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, hardware.FrameCount);
+            Assert.True(hardware.AllFramesAreBlack);
+            using var document = JsonDocument.Parse(
+                await File.ReadAllTextAsync(
+                    fileName,
+                    TestContext.Current.CancellationToken));
+            Assert.Equal(
+                0.37,
+                document.RootElement.GetProperty("Brightness").GetDouble(),
+                precision: 2);
         }
         finally
         {
@@ -668,6 +751,33 @@ public sealed class BlinkStickBarTests
             }
         }
 
+        public bool HasLitFrame
+        {
+            get
+            {
+                lock (gate)
+                    return frames.Any(frame => frame.IsLit);
+            }
+        }
+
+        public int FrameCount
+        {
+            get
+            {
+                lock (gate)
+                    return frames.Count;
+            }
+        }
+
+        public bool AllFramesAreBlack
+        {
+            get
+            {
+                lock (gate)
+                    return frames.All(frame => !frame.IsLit);
+            }
+        }
+
         public bool Connect()
         {
             lock (gate)
@@ -702,6 +812,12 @@ public sealed class BlinkStickBarTests
                     frame.Channel == channel
                     && frame.ByteCount == byteCount);
             }
+        }
+
+        public void ResetFrames()
+        {
+            lock (gate)
+                frames.Clear();
         }
 
         public void Dispose()

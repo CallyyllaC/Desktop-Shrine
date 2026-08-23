@@ -7,7 +7,9 @@ using Microsoft.Extensions.Logging;
 
 namespace DesktopShrine.Plugin.BlinkStickBar;
 
-public sealed class BlinkStickBarPlugin : IOutputPlugin
+public sealed class BlinkStickBarPlugin :
+    IOutputPlugin,
+    IShutdownOutputParticipant
 {
     private const string MediaPortId = "media";
     private const string PalettePortId = "palette";
@@ -32,7 +34,8 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
     private Task? animationTask;
     private long reconnectAfter;
     private bool disposed;
-    private bool shutdownClearSent;
+    private bool outputMuted;
+    private bool blackoutSent;
 
     public BlinkStickBarPlugin() : this(() => new BlinkStickHardware())
     {
@@ -133,7 +136,10 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
         token.ThrowIfCancellationRequested();
         lock (gate)
         {
-            shutdownClearSent = false;
+            if (outputMuted)
+                return ValueTask.CompletedTask;
+
+            blackoutSent = false;
             TryConnect();
             animationCancellation =
                 CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -145,9 +151,9 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
     public async ValueTask StopAsync(CancellationToken token)
     {
         _ = token;
+        MuteOutputForShutdown();
+        BlackoutForShutdown();
         await StopAnimationAsync();
-        lock (gate)
-            ClearOutputCore();
     }
 
     public async ValueTask DisposeAsync()
@@ -169,12 +175,32 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
         foreach (var subscription in subscriptions)
             await subscription.DisposeAsync();
         subscriptions.Clear();
+        MuteOutputForShutdown();
+        BlackoutForShutdown();
         lock (gate)
         {
-            ClearOutputCore();
             hardware?.Dispose();
             hardware = null;
         }
+    }
+
+    public void MuteOutputForShutdown()
+    {
+        lock (gate)
+        {
+            if (outputMuted)
+                return;
+
+            outputMuted = true;
+            logger?.LogInformation("BlinkStick LED output muted");
+        }
+    }
+
+    public void BlackoutForShutdown()
+    {
+        MuteOutputForShutdown();
+        lock (gate)
+            ClearOutputCore();
     }
 
     private ValueTask UpdateHardwareAsync(
@@ -296,6 +322,9 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
 
     private void RenderAndSend(TimeSpan elapsed)
     {
+        if (outputMuted)
+            return;
+
         if (hardware?.IsConnected != true && !TryConnect())
             return;
 
@@ -308,7 +337,7 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
                     DateTimeOffset.UtcNow);
             var frame = outputTransform!.Apply(effectFrame);
             hardware!.Send((byte)settings!.DataChannel, frame);
-            shutdownClearSent = false;
+            blackoutSent = false;
         }
         catch (Exception exception)
             when (exception is not OperationCanceledException)
@@ -363,6 +392,9 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
 
     private bool TryConnect()
     {
+        if (outputMuted)
+            return false;
+
         if (hardware!.IsConnected)
             return true;
         if (Stopwatch.GetTimestamp() < reconnectAfter)
@@ -375,7 +407,7 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
                 hardware.TurnOff(
                     (byte)settings!.DataChannel,
                     settings.LedCount * 4);
-                shutdownClearSent = false;
+                blackoutSent = false;
                 logger!.LogInformation(
                     "Connected to BlinkStick Pro on channel {Channel} with {LedCount} RGBW pixels; hardware waves at {FrameRate:F0} FPS; effective brightness {Brightness:P0}",
                     settings!.DataChannel,
@@ -405,15 +437,18 @@ public sealed class BlinkStickBarPlugin : IOutputPlugin
 
     private void ClearOutputCore()
     {
-        if (shutdownClearSent || hardware?.IsConnected != true || settings is null)
+        if (blackoutSent || hardware?.IsConnected != true || settings is null)
             return;
         try
         {
+            logger?.LogInformation(
+                "Sending final BlinkStick blackout frame on channel {Channel}",
+                settings.DataChannel);
             hardware.TurnOff(
                 (byte)settings.DataChannel,
                 settings.LedCount * 4);
-            shutdownClearSent = true;
-            logger?.LogInformation("Cleared BlinkStick LEDs before shutdown");
+            blackoutSent = true;
+            logger?.LogInformation("BlinkStick LED blackout complete");
         }
         catch (Exception exception)
         {
