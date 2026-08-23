@@ -46,23 +46,14 @@ Desktop Shrine can turn CPU and GPU telemetry into a live physical display. The 
 
 ## Demo videos
 
-Short demo clips can live under `videos/`. H.264 MP4 is recommended for broad GitHub and browser compatibility.
-
-<!--
-Add the recorded clips to the repository and uncomment the relevant links.
-
 ### Media visualiser
 
-[Watch the media and audio visualiser demo](videos/MediaVisualiser.mp4)
+[Watch the media and audio visualiser demo](videos/C0009.mp4)
 
 ### Hardware telemetry
 
-[Watch the hardware telemetry demo](videos/HardwareTelemetry.mp4)
+[Watch the steam now playing demo](videos/C0010.mp4)
 
-### Routing and state changes
-
-[Watch the automatic routing demo](videos/RoutingDemo.mp4)
--->
 
 ## Current features
 
