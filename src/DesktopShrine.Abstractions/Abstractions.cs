@@ -85,6 +85,17 @@ public interface ILiveConfiguration<TConfig>
     event EventHandler<ConfigurationChangedEventArgs<TConfig>>? Changed;
 }
 
+public interface IPluginConfigurationEditor
+{
+    string? GetValue(string pluginId, string settingPath);
+
+    ValueTask SetValueAsync(
+        string pluginId,
+        string settingPath,
+        object? value,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record InputRouteSnapshot
 {
     public required PortAddress Consumer { get; init; }
@@ -115,6 +126,15 @@ public interface IInputPlugin : IShrinePlugin
     }
 }
 public interface IOutputPlugin : IShrinePlugin { IReadOnlyCollection<RequiredPortDescriptor> RequiredPorts { get; } }
+public enum ApplicationShutdownKind
+{
+    Exit,
+    Restart
+}
+public interface IApplicationControl
+{
+    void RequestShutdown(ApplicationShutdownKind kind);
+}
 public interface IPluginContext
 {
     string PluginId { get; }
@@ -123,6 +143,8 @@ public interface IPluginContext
     IPluginPublisher Publisher { get; }
     IPluginSubscriber Subscriber { get; }
     ILiveConfiguration<OutputInputProfile>? InputProfile { get; }
+    IPluginConfigurationEditor? ConfigurationEditor => null;
+    IApplicationControl? ApplicationControl => null;
 
     ILiveConfiguration<TConfig> ObserveConfiguration<TConfig>(
         Func<IConfiguration, TConfig> snapshotFactory,

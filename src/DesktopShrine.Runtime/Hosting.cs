@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DesktopShrine.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -69,19 +70,15 @@ public interface IPluginConfigurationProvider
 public sealed class PluginConfigurationProvider(
     IConfiguration configuration,
     IOptions<DesktopShrineOptions> options,
-    ILogger<PluginConfigurationProvider> logger) : IPluginConfigurationProvider
+    ILogger<PluginConfigurationProvider> logger) :
+    IPluginConfigurationProvider,
+    IPluginConfigurationEditor
 {
+    private readonly SemaphoreSlim writeGate = new(1, 1);
+
     public IConfiguration GetConfiguration(string id)
     {
-        if (string.IsNullOrWhiteSpace(id)
-            || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-            || id.Contains(Path.DirectorySeparatorChar)
-            || id.Contains(Path.AltDirectorySeparatorChar))
-            throw new ArgumentException("Plugin ID cannot be used as a configuration file name.", nameof(id));
-
-        var fileName = Path.Combine(
-            options.Value.PluginConfigurationDirectory,
-            $"{id}.json");
+        var fileName = GetFileName(id);
         EnsurePlaceholderExists(fileName, id);
 
         // The plugin-owned JSON file provides its defaults. The conventional
@@ -92,6 +89,138 @@ public sealed class PluginConfigurationProvider(
             .AddJsonFile(fileName, optional: true, reloadOnChange: true)
             .AddConfiguration(configuration.GetSection($"Plugins:{id}"))
             .Build();
+    }
+
+    public string? GetValue(string pluginId, string settingPath)
+    {
+        ValidateSettingPath(settingPath);
+        var pluginConfiguration = GetConfiguration(pluginId);
+        try
+        {
+            return pluginConfiguration[settingPath];
+        }
+        finally
+        {
+            (pluginConfiguration as IDisposable)?.Dispose();
+        }
+    }
+
+    public async ValueTask SetValueAsync(
+        string pluginId,
+        string settingPath,
+        object? value,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSettingPath(settingPath);
+        var fileName = GetFileName(pluginId);
+        await writeGate.WaitAsync(cancellationToken);
+        string? temporaryFileName = null;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(fileName)!);
+            JsonObject root;
+            if (File.Exists(fileName))
+            {
+                await using var source = new FileStream(
+                    fileName,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                root = await JsonNode.ParseAsync(
+                           source,
+                           cancellationToken: cancellationToken)
+                       as JsonObject
+                    ?? throw new InvalidOperationException(
+                        $"Plugin configuration {fileName} must contain a JSON object.");
+            }
+            else
+            {
+                root = [];
+            }
+
+            SetNode(root, settingPath, JsonSerializer.SerializeToNode(value));
+            temporaryFileName = Path.Combine(
+                Path.GetDirectoryName(fileName)!,
+                $".{Path.GetFileName(fileName)}.{Guid.NewGuid():N}.tmp");
+            await using (var destination = new FileStream(
+                             temporaryFileName,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None))
+            {
+                await JsonSerializer.SerializeAsync(
+                    destination,
+                    root,
+                    new JsonSerializerOptions { WriteIndented = true },
+                    cancellationToken);
+                await destination.FlushAsync(cancellationToken);
+            }
+
+            File.Move(temporaryFileName, fileName, overwrite: true);
+            temporaryFileName = null;
+            logger.LogInformation(
+                "Updated setting {SettingPath} for plugin {PluginId}",
+                settingPath,
+                pluginId);
+        }
+        finally
+        {
+            if (temporaryFileName is not null)
+            {
+                try
+                {
+                    File.Delete(temporaryFileName);
+                }
+                catch (IOException)
+                {
+                }
+            }
+            writeGate.Release();
+        }
+    }
+
+    private string GetFileName(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)
+            || id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || id.Contains(Path.DirectorySeparatorChar)
+            || id.Contains(Path.AltDirectorySeparatorChar))
+            throw new ArgumentException(
+                "Plugin ID cannot be used as a configuration file name.",
+                nameof(id));
+
+        return Path.Combine(
+            options.Value.PluginConfigurationDirectory,
+            $"{id}.json");
+    }
+
+    private static void ValidateSettingPath(string settingPath)
+    {
+        if (string.IsNullOrWhiteSpace(settingPath)
+            || settingPath.Split(':').Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException(
+                "Setting path must contain non-empty colon-separated segments.",
+                nameof(settingPath));
+    }
+
+    private static void SetNode(
+        JsonObject root,
+        string settingPath,
+        JsonNode? value)
+    {
+        var segments = settingPath.Split(':');
+        var current = root;
+        for (var index = 0; index < segments.Length - 1; index++)
+        {
+            var segment = segments[index];
+            if (current[segment] is not JsonObject child)
+            {
+                child = [];
+                current[segment] = child;
+            }
+            current = child;
+        }
+        current[segments[^1]] = value;
     }
 
     private void EnsurePlaceholderExists(string fileName, string pluginId)
@@ -135,7 +264,9 @@ public sealed class PluginContext(
     ILoggerFactory logs,
     IPluginPublisher publisher,
     IPluginSubscriber subscriber,
-    ILiveConfiguration<OutputInputProfile>? inputProfile) :
+    ILiveConfiguration<OutputInputProfile>? inputProfile,
+    IPluginConfigurationEditor? configurationEditor = null,
+    IApplicationControl? applicationControl = null) :
     IPluginContext,
     IDisposable
 {
@@ -148,6 +279,9 @@ public sealed class PluginContext(
     public IPluginPublisher Publisher => publisher;
     public IPluginSubscriber Subscriber => subscriber;
     public ILiveConfiguration<OutputInputProfile>? InputProfile => inputProfile;
+    public IPluginConfigurationEditor? ConfigurationEditor =>
+        configurationEditor;
+    public IApplicationControl? ApplicationControl => applicationControl;
 
     public ILiveConfiguration<TConfig> ObserveConfiguration<TConfig>(
         Func<IConfiguration, TConfig> snapshotFactory,
@@ -188,6 +322,7 @@ internal sealed class PluginLifecycleManager(
     IRouteTable routes,
     IPluginConfigurationProvider configs,
     IOutputInputProfileService profiles,
+    IApplicationControl applicationControl,
     ILoggerFactory logs,
     ILogger<PluginLifecycleManager> logger) : IPluginLifecycleManager
 {
@@ -209,9 +344,11 @@ internal sealed class PluginLifecycleManager(
                     logs,
                     new PluginPublisher(id, ports, contracts, bus),
                     new PluginSubscriber(id, ports, contracts, bus, routes),
-                    p.Instance is IOutputPlugin
+                    p.Instance is IOutputPlugin { RequiredPorts.Count: > 0 }
                         ? profiles.GetLiveProfile(id)
-                        : null);
+                        : null,
+                    configs as IPluginConfigurationEditor,
+                    applicationControl);
                 contexts.Add(id, ctx);
                 await p.Instance.InitialiseAsync(ctx, token);
                 p.State = PluginLifecycleState.Initialised;
@@ -229,7 +366,61 @@ internal sealed class PluginLifecycleManager(
             }
     }
     public async ValueTask StartAllAsync(CancellationToken token) { var ordered = plugins.OrderByDescending(x => x.Instance is IOutputPlugin); foreach (var p in ordered.Where(x => x.State == PluginLifecycleState.Initialised)) try { p.State = PluginLifecycleState.Starting; await p.Instance.StartAsync(token); p.State = PluginLifecycleState.Running; p.StartedAt = DateTimeOffset.UtcNow; started.Add(p); } catch (Exception ex) { p.State = PluginLifecycleState.Faulted; p.LastError = ex; logger.LogError(ex, "Plugin {PluginId} could not start", p.Instance.Descriptor.Id); } }
-    public async ValueTask StopAllAsync(CancellationToken token) { foreach (var p in started.AsEnumerable().Reverse()) try { p.State = PluginLifecycleState.Stopping; await p.Instance.StopAsync(token); p.State = PluginLifecycleState.Stopped; p.StoppedAt = DateTimeOffset.UtcNow; } catch (Exception ex) { p.State = PluginLifecycleState.Faulted; p.LastError = ex; logger.LogError(ex, "Plugin {PluginId} could not stop", p.Instance.Descriptor.Id); } finally { await p.Instance.DisposeAsync(); if (contexts.Remove(p.Instance.Descriptor.Id, out var context)) context.Dispose(); } started.Clear(); }
+    public async ValueTask StopAllAsync(CancellationToken token)
+    {
+        foreach (var plugin in started.AsEnumerable().Reverse())
+        {
+            try
+            {
+                plugin.State = PluginLifecycleState.Stopping;
+                await plugin.Instance.StopAsync(token);
+                plugin.State = PluginLifecycleState.Stopped;
+                plugin.StoppedAt = DateTimeOffset.UtcNow;
+            }
+            catch (Exception exception)
+            {
+                plugin.State = PluginLifecycleState.Faulted;
+                plugin.LastError = exception;
+                logger.LogError(
+                    exception,
+                    "Plugin {PluginId} could not stop",
+                    plugin.Instance.Descriptor.Id);
+            }
+            await DisposePluginAsync(plugin);
+        }
+        started.Clear();
+
+        // A plugin can acquire resources during InitialiseAsync or partially
+        // through StartAsync before startup fails. Dispose any such remaining
+        // contexts through the same deterministic shutdown path.
+        foreach (var plugin in plugins.AsEnumerable().Reverse().Where(plugin =>
+                     contexts.ContainsKey(plugin.Instance.Descriptor.Id)))
+        {
+            await DisposePluginAsync(plugin);
+        }
+    }
+
+    private async ValueTask DisposePluginAsync(LoadedPlugin plugin)
+    {
+        try
+        {
+            await plugin.Instance.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            plugin.State = PluginLifecycleState.Faulted;
+            plugin.LastError = exception;
+            logger.LogError(
+                exception,
+                "Plugin {PluginId} could not dispose cleanly",
+                plugin.Instance.Descriptor.Id);
+        }
+        finally
+        {
+            if (contexts.Remove(plugin.Instance.Descriptor.Id, out var context))
+                context.Dispose();
+        }
+    }
 }
 public sealed record PluginSnapshot(string Id, PluginLifecycleState State, string? Error);
 public sealed record BindingSnapshot(PortAddress Provider, PortAddress Consumer);

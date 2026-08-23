@@ -4,6 +4,7 @@ using DesktopShrine.Runtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 using Xunit;
 
 namespace DesktopShrine.Runtime.Tests;
@@ -88,6 +89,137 @@ public sealed class LiveConfigurationAndDeliveryTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task PluginConfigurationEditorUpdatesOneValueAtomically()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"desktop-shrine-config-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var fileName = Path.Combine(directory, "blinkstick-bar.json");
+            await File.WriteAllTextAsync(
+                fileName,
+                """
+                {
+                  "LedCount": 48,
+                  "Brightness": 0.9
+                }
+                """,
+                TestContext.Current.CancellationToken);
+            var provider = new PluginConfigurationProvider(
+                new ConfigurationBuilder().Build(),
+                Options.Create(new DesktopShrineOptions
+                {
+                    PluginConfigurationDirectory = directory
+                }),
+                NullLogger<PluginConfigurationProvider>.Instance);
+
+            await provider.SetValueAsync(
+                "blinkstick-bar",
+                "Brightness",
+                0.4f,
+                TestContext.Current.CancellationToken);
+
+            using var document = JsonDocument.Parse(
+                await File.ReadAllTextAsync(
+                    fileName,
+                    TestContext.Current.CancellationToken));
+            Assert.Equal(
+                48,
+                document.RootElement.GetProperty("LedCount").GetInt32());
+            Assert.Equal(
+                0.4f,
+                document.RootElement.GetProperty("Brightness").GetSingle());
+            Assert.Equal("0.4", provider.GetValue(
+                "blinkstick-bar",
+                "Brightness"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PluginConfigurationEditorSupportsNestedSettingPaths()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"desktop-shrine-config-{Guid.NewGuid():N}");
+        try
+        {
+            var provider = new PluginConfigurationProvider(
+                new ConfigurationBuilder().Build(),
+                Options.Create(new DesktopShrineOptions
+                {
+                    PluginConfigurationDirectory = directory
+                }),
+                NullLogger<PluginConfigurationProvider>.Instance);
+
+            await provider.SetValueAsync(
+                "future-plugin",
+                "Display:Brightness",
+                75,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(
+                "75",
+                provider.GetValue("future-plugin", "Display:Brightness"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ControlOnlyOutputInitialisesWithoutAnInputProfile()
+    {
+        var contracts = new ContractRegistry();
+        var routes = new RouteTable();
+        var ports = new PortRegistry(contracts);
+        var profiles = new ThrowingProfileService();
+        var output = new ControlOnlyOutput();
+        var loaded = new LoadedPlugin
+        {
+            Instance = output,
+            Manifest = new()
+            {
+                Id = output.Descriptor.Id,
+                Version = "1.0.0",
+                EntryAssembly = "unused.dll",
+                EntryType = typeof(ControlOnlyOutput).FullName!
+            },
+            LoadContext = new(
+                typeof(LiveConfigurationAndDeliveryTests).Assembly.Location,
+                [])
+        };
+        var lifecycle = new PluginLifecycleManager(
+            ports,
+            contracts,
+            new PortBus(routes, NullLogger<PortBus>.Instance),
+            routes,
+            new EmptyConfigurationProvider(),
+            profiles,
+            new NoOpApplicationControl(),
+            NullLoggerFactory.Instance,
+            NullLogger<PluginLifecycleManager>.Instance);
+        lifecycle.Add(loaded);
+
+        await lifecycle.InitialiseAllAsync(
+            TestContext.Current.CancellationToken);
+        await lifecycle.StartAllAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(PluginLifecycleState.Running, loaded.State);
+        Assert.Null(output.InputProfile);
+        Assert.Equal(0, profiles.GetLiveProfileCount);
+
+        await lifecycle.StopAllAsync(CancellationToken.None);
     }
 
     [Fact]
@@ -291,6 +423,81 @@ public sealed class LiveConfigurationAndDeliveryTests
         {
             Settings = settings;
             ApplyCount++;
+        }
+    }
+
+    private sealed class EmptyConfigurationProvider :
+        IPluginConfigurationProvider
+    {
+        public IConfiguration GetConfiguration(string pluginId) =>
+            new ConfigurationBuilder().Build();
+    }
+
+    private sealed class ThrowingProfileService :
+        IOutputInputProfileService
+    {
+        public int GetLiveProfileCount { get; private set; }
+        public event EventHandler<OutputProfilesChangedEventArgs>? Changed
+        {
+            add { }
+            remove { }
+        }
+        public IReadOnlyCollection<OutputInputProfile> Profiles => [];
+
+        public ILiveConfiguration<OutputInputProfile> GetLiveProfile(
+            string outputId)
+        {
+            GetLiveProfileCount++;
+            throw new InvalidOperationException(
+                "A control-only output must not request an input profile.");
+        }
+
+        public ValueTask SynchroniseAsync(
+            CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask<bool> TryUpdateAsync(
+            OutputInputProfile profile,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromResult(false);
+    }
+
+    private sealed class ControlOnlyOutput : IOutputPlugin
+    {
+        public PluginDescriptor Descriptor { get; } = new()
+        {
+            Id = "control-only-output",
+            Name = "Control-only output",
+            Version = new(1, 0)
+        };
+
+        public IReadOnlyCollection<RequiredPortDescriptor> RequiredPorts => [];
+        public ILiveConfiguration<OutputInputProfile>? InputProfile
+        {
+            get;
+            private set;
+        }
+
+        public ValueTask InitialiseAsync(
+            IPluginContext context,
+            CancellationToken cancellationToken)
+        {
+            InputProfile = context.InputProfile;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask StartAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+        public ValueTask StopAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoOpApplicationControl : IApplicationControl
+    {
+        public void RequestShutdown(ApplicationShutdownKind kind)
+        {
+            _ = kind;
         }
     }
 

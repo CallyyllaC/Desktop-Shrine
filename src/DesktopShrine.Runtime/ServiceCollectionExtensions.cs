@@ -1,3 +1,4 @@
+using DesktopShrine.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,6 +18,9 @@ public static class ServiceCollectionExtensions
                 FromApplicationDirectory(options.OutputProfileFile);
         });
         services.AddSingleton<IContractRegistry, ContractRegistry>();
+        services.AddSingleton<ApplicationShutdownCoordinator>();
+        services.AddSingleton<IApplicationControl>(provider =>
+            provider.GetRequiredService<ApplicationShutdownCoordinator>());
         services.AddSingleton<IInputActivityRegistry, InputActivityRegistry>();
         services.AddSingleton<LocalAppDataMigration>();
         services.AddSingleton<IPortRegistry, PortRegistry>();

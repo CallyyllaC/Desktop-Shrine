@@ -50,6 +50,11 @@ Application binaries and plugins are installed beneath Program Files. Removing
 Desktop Shrine removes its GOverlay bridge but deliberately leaves the official
 GOverlay application installed, since it may be used independently.
 
+Double-left-click the Desktop Shrine tray icon to open the 2.0 Alpha settings window.
+Right-click it for the configurable Quick Access panel. Folder shortcuts in the
+Application page use the same canonical `%LOCALAPPDATA%\DesktopShrine` paths as
+the host and open the installation, configuration, log, and plugin locations.
+
 ## Legacy GOverlay compatibility and preservation
 
 Desktop Shrine can optionally download the legacy GOverlay installer directly
@@ -107,6 +112,6 @@ To choose a four-part installer version or skip tests during a packaging-only
 iteration, call the PowerShell entry point directly:
 
 ```powershell
-.\scripts\Build-WindowsInstaller.ps1 -Version 1.1.0
+.\scripts\Build-WindowsInstaller.ps1 -Version 2.0.0 -ReleaseChannel Alpha
 .\scripts\Build-WindowsInstaller.ps1 -SkipTests
 ```

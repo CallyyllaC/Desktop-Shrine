@@ -1,5 +1,11 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.1.0"
+  #define MyAppVersion "2.0.0"
+#endif
+#ifndef MyAppDisplayVersion
+  #define MyAppDisplayVersion "2.0 Alpha"
+#endif
+#ifndef MyAppArtifactVersion
+  #define MyAppArtifactVersion "2.0.0-alpha"
 #endif
 #ifndef PublishRoot
   #error PublishRoot must be supplied by Build-WindowsInstaller.ps1
@@ -21,7 +27,7 @@
 [Setup]
 AppId={{17BCE957-E0DB-4725-A31B-A18F8D9DD7FC}
 AppName={#MyAppName}
-AppVersion={#MyAppVersion}
+AppVersion={#MyAppDisplayVersion}
 AppPublisher=Desktop Shrine
 DefaultDirName={autopf}\Desktop Shrine
 DefaultGroupName=Desktop Shrine
@@ -30,7 +36,7 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#InstallerOutput}
-OutputBaseFilename=DesktopShrine-Setup-{#MyAppVersion}-win-x64
+OutputBaseFilename=DesktopShrine-Setup-{#MyAppArtifactVersion}-win-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -38,6 +44,7 @@ SetupLogging=yes
 UsedUserAreasWarning=no
 CloseApplications=yes
 RestartApplications=no
+SetupIconFile={#RepositoryRoot}\assets\DesktopShrine.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoDescription=Desktop Shrine installer
@@ -52,6 +59,7 @@ Name: "goverlay"; Description: "Download and install legacy GOverlay 1.6.9 from 
 [Files]
 Source: "{#PublishRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RepositoryRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepositoryRoot}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepositoryRoot}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepositoryRoot}\third-party-licenses\Oxanium-OFL-1.1.txt"; DestDir: "{app}\licenses\third-party-licenses"; Flags: ignoreversion
 

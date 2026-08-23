@@ -1,0 +1,9 @@
+{
+  "pluginId":"windows-now-playing","displayName":"Windows Media","description":"Windows Global Media Session input.",
+  "settings":[
+    {"id":"windows-media.artwork","settingPath":"IncludeArtwork","displayName":"Include artwork","category":"Media","controlType":"Toggle","defaultValue":"true"},
+    {"id":"windows-media.max-artwork","settingPath":"MaximumArtworkBytes","displayName":"Maximum artwork bytes","category":"Media","controlType":"Number","defaultValue":"16777216","minimum":1024,"maximum":268435456,"step":1024},
+    {"id":"windows-media.timeline","settingPath":"PublishTimelineUpdates","displayName":"Publish timeline updates","category":"Playback","controlType":"Toggle","defaultValue":"true"},
+    {"id":"windows-media.paused-timeout","settingPath":"PausedTimeoutSeconds","displayName":"Paused timeout *","category":"Playback","controlType":"Number","defaultValue":"300","minimum":0,"maximum":86400,"step":1,"requiresRestart":true,"restartReason":"An in-progress pause timer retains the duration it was created with; restart guarantees the new timeout is applied immediately."}
+  ]
+}

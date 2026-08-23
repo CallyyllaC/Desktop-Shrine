@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
+using DesktopShrine.Abstractions;
 using DesktopShrine.Runtime;
 using DesktopShrine.Storage;
 using Microsoft.Extensions.Configuration;
@@ -10,6 +11,16 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 
 const string launchArgument = "--launch";
+if (RestartProcessHandoff.TryParse(
+        args,
+        out var previousProcessId,
+        out var forwardedArguments))
+{
+    await RestartProcessHandoff.WaitForExitAsync(previousProcessId);
+    StartProcess(forwardedArguments);
+    return;
+}
+
 var launchRequested = args.Any(argument =>
     string.Equals(argument, launchArgument, StringComparison.OrdinalIgnoreCase));
 if (launchRequested
@@ -77,12 +88,53 @@ builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
 });
 builder.Logging.ClearProviders();
 builder.Logging.AddDebug();
+if (string.Equals(
+        Environment.GetEnvironmentVariable(
+            "DESKTOP_SHRINE_CONSOLE_LOGGING"),
+        "1",
+        StringComparison.Ordinal))
+{
+    builder.Logging.AddSimpleConsole(options => options.SingleLine = true);
+}
 builder.Services.AddDesktopShrineRuntime(builder.Configuration);
-using var host = builder.Build();
-host.Services.GetRequiredService<LocalAppDataMigration>()
-    .Migrate(DesktopShrinePaths.Current);
-SeedPluginConfiguration(pluginConfigurationDirectory);
-await host.RunAsync();
+var restartRequested = false;
+using (var host = builder.Build())
+{
+    host.Services.GetRequiredService<LocalAppDataMigration>()
+        .Migrate(DesktopShrinePaths.Current);
+    SeedPluginConfiguration(pluginConfigurationDirectory);
+    var shutdown = host.Services
+        .GetRequiredService<ApplicationShutdownCoordinator>();
+    SessionEndingEventHandler? sessionEnding = null;
+    if (OperatingSystem.IsWindows())
+    {
+        sessionEnding = (_, eventArgs) =>
+        {
+            host.Services.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("WindowsSession")
+                .LogInformation(
+                    "Windows session ending ({Reason}); beginning shared Desktop Shrine shutdown",
+                    eventArgs.Reason);
+            shutdown.RequestShutdown(ApplicationShutdownKind.Exit);
+        };
+        SystemEvents.SessionEnding += sessionEnding;
+    }
+    try
+    {
+        await host.RunAsync();
+    }
+    finally
+    {
+        if (sessionEnding is not null)
+            SystemEvents.SessionEnding -= sessionEnding;
+    }
+    restartRequested = shutdown.RestartRequested;
+}
+
+if (restartRequested)
+{
+    StartRestartHandoff(args);
+}
 
 static bool ShouldRunAsAdministrator()
 {
@@ -101,6 +153,28 @@ static bool IsAdministrator()
     using var identity = WindowsIdentity.GetCurrent();
     return new WindowsPrincipal(identity).IsInRole(
         WindowsBuiltInRole.Administrator);
+}
+
+static void StartRestartHandoff(IReadOnlyList<string> originalArguments)
+{
+    StartProcess(RestartProcessHandoff.CreateArguments(
+        Environment.ProcessId,
+        originalArguments));
+}
+
+static void StartProcess(IReadOnlyList<string> arguments)
+{
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath
+            ?? throw new InvalidOperationException(
+                "The Desktop Shrine executable path is unavailable."),
+        UseShellExecute = true,
+        WorkingDirectory = AppContext.BaseDirectory
+    };
+    foreach (var argument in arguments)
+        startInfo.ArgumentList.Add(argument);
+    Process.Start(startInfo);
 }
 
 static void SeedPluginConfiguration(string destinationDirectory)

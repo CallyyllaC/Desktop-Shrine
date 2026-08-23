@@ -1,9 +1,9 @@
 # Desktop Shrine
 
-> [!Warning]
-> There are currently issues using some GOverlay devices, either IPS or later (251) firmware is causing it to crash and go into and infinite boot loop. I am working on a fix.
-
 Desktop Shrine is a modular Windows desktop runtime that turns activity on the computer into ambient visual output.
+
+Release history since the last public `1.1.0` build is recorded in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 It can react to music, games, desktop audio, and hardware activity, then present that information through devices such as a GOverlay LCD screen or a BlinkStick RGBW LED strip. Inputs and outputs are implemented as plugins, allowing the system to grow without turning the host application into one enormous switch statement.
 
@@ -27,6 +27,8 @@ It can react to music, games, desktop audio, and hardware activity, then present
 
 - **GOverlay LCDSysInfo** displays media, game, and hardware information on a supported GOverlay screen.
 - **BlinkStick RGBW** provides audio-reactive and hardware-reactive LED effects.
+- **Taskbar Controls** adds a notification-area menu for live output controls,
+  beginning with BlinkStick brightness.
 - **Console Display** exposes plugin activity and state during development.
 
 ## How routing works
@@ -142,13 +144,59 @@ When hardware monitoring is selected, the strip is divided at its centre:
 - Power draw affects trail length.
 - Temperature shifts the effect from cool tones toward warning colours.
 
-The development defaults target 24 RGBW pixels on BlinkStick Pro channel 0, render at 20 frames per second, and enforce a conservative USB power budget. Separately powered strips can be configured explicitly.
+The development defaults target 48 RGBW pixels on BlinkStick Pro channel 0, render at 20 frames per second, and enforce a conservative USB power budget. Separately powered strips can be configured explicitly.
+
+Both media/Steam audio and hardware telemetry emit unscaled RGBW effect frames
+into one shared output stage. That stage applies user gamma, then proportionally
+scales the gamma-shaped result by user brightness, and finally applies the
+USB/electrical limit. It does not derive correction multipliers from frame
+luminance. `HardwareGamma` remains an effect-shaping control for telemetry
+waves; it is separate from the user output gamma and is applied during telemetry
+effect generation.
 
 BlinkStick settings are stored in:
 
 ```text
 configuration/plugins/blinkstick-bar.json
 ```
+
+The host watches this file and applies valid BlinkStick setting changes while
+it is running. Invalid snapshots are rejected and the last valid settings stay
+active; none of the current BlinkStick settings require a restart.
+
+### Taskbar controls
+
+Double-left-click the Desktop Shrine notification-area icon to open the full
+settings window. Installed plugins contribute lightweight `settings.json`
+metadata, while values continue to read and write their existing per-plugin
+configuration files. Live-safe changes are applied immediately; startup-bound
+settings are marked with `*` and explain why a restart is required.
+
+Right-click the icon to open the compact Desktop Shrine-themed Quick Access
+panel. Up to five suitable sliders, toggles, or selectors can be chosen from
+the full settings window. BlinkStick brightness, BlinkStick gamma, and Audio
+source are selected by default for existing behaviour. Stable setting IDs are
+stored in `configuration/plugins/taskbar-controls.json`; missing or removed
+plugin settings are ignored safely.
+
+Audio device changes rebind the running capture plugin without restarting
+Desktop Shrine. Active endpoints are saved by their stable Windows device ID.
+If a saved endpoint disappears, capture temporarily follows the default and
+returns to the saved endpoint if it becomes available again.
+
+Brightness selects exact 1% values from 0% through 100%, while logarithmic
+slider travel gives lower values more room. Gamma uses linear 0.1 steps from
+0.1 through 4.0. The saved values remain ordinary linear numbers in their
+plugin JSON files and persist across launches.
+
+The same menu also provides **Restart Desktop Shrine** and **Exit Desktop
+Shrine**. Both use the normal host shutdown sequence so producers stop, outputs
+clear, and plugins dispose before termination. Restart launches the replacement
+process only after that shared cleanup completes.
+
+The settings catalogue, configuration editing service, and tray model remain
+independent of the BlinkStick renderer; the tray no longer requires a specific
+input or output plugin to be installed.
 
 ## Plugin layout
 

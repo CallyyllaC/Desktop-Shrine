@@ -75,7 +75,7 @@ internal sealed class HardwareWaveRenderer(BlinkStickBarSettings settings)
             settings.CpuHotCelsius,
             settings.CpuCriticalCelsius);
 
-        return Encode(pixels, settings.EffectiveBrightness);
+        return Encode(pixels);
     }
 
     private void RenderSide(
@@ -227,20 +227,17 @@ internal sealed class HardwareWaveRenderer(BlinkStickBarSettings settings)
             1);
     }
 
-    private static byte[] Encode(
-        IReadOnlyList<Pixel> pixels,
-        float brightness)
+    private static byte[] Encode(IReadOnlyList<Pixel> pixels)
     {
         var output = new byte[pixels.Count * 4];
-        var scale = Math.Clamp(brightness, 0, 1);
         for (var index = 0; index < pixels.Count; index++)
         {
             var pixel = pixels[index];
             var offset = index * 4;
-            output[offset] = ToByte(pixel.Green * scale);
-            output[offset + 1] = ToByte(pixel.Red * scale);
-            output[offset + 2] = ToByte(pixel.Blue * scale);
-            output[offset + 3] = ToByte(pixel.White * scale);
+            output[offset] = ToByte(pixel.Green);
+            output[offset + 1] = ToByte(pixel.Red);
+            output[offset + 2] = ToByte(pixel.Blue);
+            output[offset + 3] = ToByte(pixel.White);
         }
         return output;
     }

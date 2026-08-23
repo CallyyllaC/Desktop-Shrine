@@ -28,9 +28,9 @@ public sealed class AudioCollectorPlugin : IInputPlugin
     private int waveformSamples;
     private TimeSpan statusInterval;
     private TimeSpan devicePollInterval;
-    private string? configuredDevice;
+    private ILiveConfiguration<AudioEndpointSettings>? liveEndpointSettings;
+    private AudioEndpointSettings? endpointSettings;
     private string? selectedDeviceId;
-    private bool loopback;
     private int currentSampleRate;
     private int captureRefreshRequested;
     private int sequence;
@@ -40,7 +40,7 @@ public sealed class AudioCollectorPlugin : IInputPlugin
     {
         Id = "audio-collector",
         Name = "Audio Collector",
-        Version = new(1, 0, 0),
+        Version = new(1, 2, 0),
         Description = "Captures Windows audio, mixes it to mono, and publishes FFT spectrum frames.",
         SupportedPlatforms = ["windows"]
     };
@@ -55,6 +55,10 @@ public sealed class AudioCollectorPlugin : IInputPlugin
         }
     ];
 
+    internal AudioEndpointSettings CurrentEndpointSettings =>
+        Volatile.Read(ref endpointSettings)
+        ?? throw new InvalidOperationException("Audio Collector is not initialised.");
+
     public ValueTask InitialiseAsync(IPluginContext value, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -67,11 +71,11 @@ public sealed class AudioCollectorPlugin : IInputPlugin
             ReadInteger("DevicePollIntervalSeconds", 2, 1, 60));
         fftSize = ReadInteger("FftSize", 2_048, 2, 1 << 20);
         processor = new(fftSize);
-        configuredDevice = value.Configuration["Device"];
-        loopback = string.Equals(
-            value.Configuration["CaptureMode"],
-            "loopback",
-            StringComparison.OrdinalIgnoreCase);
+        liveEndpointSettings = value.ObserveConfiguration(
+            AudioEndpointSettings.FromConfiguration,
+            AudioEndpointSettings.Validate);
+        endpointSettings = liveEndpointSettings.Current;
+        liveEndpointSettings.Changed += OnEndpointSettingsChanged;
         return ValueTask.CompletedTask;
     }
 
@@ -107,6 +111,11 @@ public sealed class AudioCollectorPlugin : IInputPlugin
     {
         StopCapture();
         stop?.Dispose();
+        if (liveEndpointSettings is not null)
+        {
+            liveEndpointSettings.Changed -= OnEndpointSettingsChanged;
+            liveEndpointSettings = null;
+        }
         return ValueTask.CompletedTask;
     }
 
@@ -210,10 +219,11 @@ public sealed class AudioCollectorPlugin : IInputPlugin
                 try
                 {
                     using var probe = new MMDeviceEnumerator();
+                    var endpoint = Volatile.Read(ref endpointSettings)!;
                     using var desired = FindDevice(
                         probe,
-                        loopback ? DataFlow.Render : DataFlow.Capture,
-                        configuredDevice);
+                        endpoint.IsLoopback ? DataFlow.Render : DataFlow.Capture,
+                        endpoint.Device).Device;
                     lock (captureGate)
                         refresh |= !string.Equals(
                             selectedDeviceId,
@@ -243,12 +253,27 @@ public sealed class AudioCollectorPlugin : IInputPlugin
         {
             StopCaptureCore();
             deviceEnumerator = new();
-            var flow = loopback ? DataFlow.Render : DataFlow.Capture;
-            device = FindDevice(
+            var endpoint = Volatile.Read(ref endpointSettings)!;
+            var flow = endpoint.IsLoopback ? DataFlow.Render : DataFlow.Capture;
+            var resolution = FindDevice(
                 deviceEnumerator,
                 flow,
-                configuredDevice);
-            capture = loopback
+                endpoint.Device);
+            device = resolution.Device;
+            if (resolution.Selection.UsedDefaultFallback)
+            {
+                logger!.LogWarning(
+                    "Configured audio endpoint {ConfiguredDevice} is unavailable; using the current default without changing the saved preference",
+                    endpoint.Device);
+            }
+            else if (resolution.Selection.UsedLegacyDisplayName)
+            {
+                logger!.LogInformation(
+                    "Resolved legacy audio device name {ConfiguredDevice} to endpoint ID {DeviceId}",
+                    endpoint.Device,
+                    resolution.Selection.SelectedId);
+            }
+            capture = endpoint.IsLoopback
                 ? new WasapiLoopbackCapture(device)
                 : new WasapiCapture(device);
             ValidateFormat(capture.WaveFormat);
@@ -265,7 +290,7 @@ public sealed class AudioCollectorPlugin : IInputPlugin
                 isRecovery
                     ? "Audio Collector rebound to {Source} device {Device} at {SampleRate} Hz, {Channels} channels, {Bits} bit"
                     : "Audio Collector started: {Source} device {Device} at {SampleRate} Hz, {Channels} channels, {Bits} bit, SIMD {SimdStatus} ({SimdWidth} floats per vector)",
-                loopback ? "desktop loopback of output" : "input",
+                endpoint.IsLoopback ? "desktop loopback of output" : "input",
                 device.FriendlyName,
                 capture.WaveFormat.SampleRate,
                 capture.WaveFormat.Channels,
@@ -300,6 +325,32 @@ public sealed class AudioCollectorPlugin : IInputPlugin
         deviceEnumerator = null;
     }
 
+    private void OnEndpointSettingsChanged(
+        object? sender,
+        ConfigurationChangedEventArgs<AudioEndpointSettings> args)
+    {
+        _ = sender;
+        if (args.Previous == args.Current)
+            return;
+
+        Volatile.Write(ref endpointSettings, args.Current);
+        if (stop?.IsCancellationRequested != false)
+            return;
+
+        try
+        {
+            StartCapture(isRecovery: true);
+            Interlocked.Exchange(ref captureRefreshRequested, 0);
+        }
+        catch (Exception exception)
+        {
+            Interlocked.Exchange(ref captureRefreshRequested, 1);
+            logger!.LogWarning(
+                exception,
+                "Could not switch audio capture endpoint immediately; automatic recovery is scheduled");
+        }
+    }
+
     private void LogStatus(ProcessedAudio frame, int sampleRate, long samplesSinceLastStatus)
     {
         var peak = 0f;
@@ -331,16 +382,72 @@ public sealed class AudioCollectorPlugin : IInputPlugin
             strongestFrequency);
     }
 
-    private static MMDevice FindDevice(MMDeviceEnumerator enumerator, DataFlow flow, string? configuredDevice)
+    private static ResolvedDevice FindDevice(
+        MMDeviceEnumerator enumerator,
+        DataFlow flow,
+        string? configuredDevice)
     {
-        if (string.IsNullOrWhiteSpace(configuredDevice) || configuredDevice.Equals("default", StringComparison.OrdinalIgnoreCase))
-            return enumerator.GetDefaultAudioEndpoint(flow, Role.Multimedia);
+        var defaultDevice = enumerator.GetDefaultAudioEndpoint(
+            flow,
+            Role.Multimedia);
+        MMDevice[] devices;
+        try
+        {
+            devices = enumerator.EnumerateAudioEndPoints(
+                    flow,
+                    DeviceState.Active)
+                .ToArray();
+        }
+        catch
+        {
+            return new(
+                defaultDevice,
+                new(defaultDevice.ID, true, false));
+        }
 
-        var devices = enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active);
-        return devices.FirstOrDefault(candidate => candidate.ID.Equals(configuredDevice, StringComparison.OrdinalIgnoreCase))
-            ?? devices.FirstOrDefault(candidate => candidate.FriendlyName.Contains(configuredDevice, StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidOperationException($"No active {flow} audio device matches '{configuredDevice}'.");
+        AudioDeviceResolution selection;
+        try
+        {
+            selection = AudioDeviceSelection.Resolve(
+                configuredDevice,
+                defaultDevice.ID,
+                devices.Select(candidate => new AudioDeviceCandidate(
+                        candidate.ID,
+                        candidate.FriendlyName))
+                    .ToArray());
+        }
+        catch
+        {
+            foreach (var candidate in devices)
+                candidate.Dispose();
+            return new(
+                defaultDevice,
+                new(defaultDevice.ID, true, false));
+        }
+
+        var selected = devices.FirstOrDefault(candidate =>
+            candidate.ID.Equals(
+                selection.SelectedId,
+                StringComparison.OrdinalIgnoreCase));
+        if (selected is null)
+        {
+            foreach (var candidate in devices)
+                candidate.Dispose();
+            return new(defaultDevice, selection);
+        }
+
+        foreach (var candidate in devices)
+        {
+            if (!ReferenceEquals(candidate, selected))
+                candidate.Dispose();
+        }
+        defaultDevice.Dispose();
+        return new(selected, selection);
     }
+
+    private sealed record ResolvedDevice(
+        MMDevice Device,
+        AudioDeviceResolution Selection);
 
     private static void ValidateFormat(WaveFormat format) => _ = GetEncoding(format);
 

@@ -1,14 +1,115 @@
+using DesktopShrine.Abstractions;
 using DesktopShrine.Contracts.Audio;
 using DesktopShrine.Plugin.AudioCollector;
 using DesktopShrine.Plugin.BlinkStickBar;
 using DesktopShrine.Plugin.GOverlay;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace DesktopShrine.Integration.Tests;
 
 public sealed class AudioCollectorTests
 {
+    [Fact]
+    public void EndpointSettingsDescribeLoopbackDefault()
+    {
+        var settings = AudioEndpointSettings.FromConfiguration(
+            new ConfigurationBuilder().Build());
+
+        Assert.True(settings.IsLoopback);
+        Assert.Equal("default", settings.Device);
+        Assert.True(AudioEndpointSettings.Validate(settings).IsValid);
+    }
+
+    [Fact]
+    public void EndpointSettingsAcceptAnExplicitInputDevice()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["CaptureMode"] = "input",
+                ["Device"] = "endpoint-id"
+            })
+            .Build();
+
+        var settings = AudioEndpointSettings.FromConfiguration(configuration);
+
+        Assert.False(settings.IsLoopback);
+        Assert.Equal("endpoint-id", settings.Device);
+        Assert.True(AudioEndpointSettings.Validate(settings).IsValid);
+    }
+
+    [Fact]
+    public void StableEndpointIdIsPreferredOverDisplayName()
+    {
+        AudioDeviceCandidate[] devices =
+        [
+            new("endpoint-a", "Speakers"),
+            new("endpoint-b", "Headphones")
+        ];
+
+        var selected = AudioDeviceSelection.Resolve(
+            "endpoint-b",
+            "endpoint-a",
+            devices);
+
+        Assert.Equal("endpoint-b", selected.SelectedId);
+        Assert.False(selected.UsedDefaultFallback);
+        Assert.False(selected.UsedLegacyDisplayName);
+    }
+
+    [Fact]
+    public void MissingSavedEndpointTemporarilyFallsBackWithoutChangingPreference()
+    {
+        const string savedPreference = "disconnected-endpoint";
+
+        var selected = AudioDeviceSelection.Resolve(
+            savedPreference,
+            "current-default",
+            [new("current-default", "Speakers")]);
+
+        Assert.Equal("current-default", selected.SelectedId);
+        Assert.True(selected.UsedDefaultFallback);
+        Assert.Equal("disconnected-endpoint", savedPreference);
+    }
+
+    [Fact]
+    public void DefaultSelectionFollowsAChangedWindowsDefault()
+    {
+        var selected = AudioDeviceSelection.Resolve(
+            "default",
+            "new-default-id",
+            [new("new-default-id", "New speakers")]);
+
+        Assert.Equal("new-default-id", selected.SelectedId);
+        Assert.False(selected.UsedDefaultFallback);
+    }
+
+    [Fact]
+    public async Task EndpointSelectionReloadsWithoutRestartingPlugin()
+    {
+        var live = new TestLiveConfiguration<AudioEndpointSettings>(
+            new("loopback", "default"));
+        var plugin = new AudioCollectorPlugin();
+        try
+        {
+            await plugin.InitialiseAsync(
+                new EndpointTestContext(live),
+                TestContext.Current.CancellationToken);
+
+            live.Update(new("input", "microphone-id"));
+
+            Assert.Equal("input", plugin.CurrentEndpointSettings.CaptureMode);
+            Assert.Equal("microphone-id", plugin.CurrentEndpointSettings.Device);
+        }
+        finally
+        {
+            await plugin.DisposeAsync();
+        }
+    }
+
     [Fact]
     public void LiveFftFrameDrivesBothPhysicalVisualisers()
     {
@@ -119,5 +220,47 @@ public sealed class AudioCollectorTests
     public void FftSizeMustBePowerOfTwo()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new AudioSignalProcessor(1_000));
+    }
+
+    private sealed class TestLiveConfiguration<TConfig>(TConfig current) :
+        ILiveConfiguration<TConfig>
+        where TConfig : notnull
+    {
+        public TConfig Current { get; private set; } = current;
+
+        public event EventHandler<ConfigurationChangedEventArgs<TConfig>>? Changed;
+
+        public void Update(TConfig value)
+        {
+            var previous = Current;
+            Current = value;
+            Changed?.Invoke(
+                this,
+                new ConfigurationChangedEventArgs<TConfig>(previous, value));
+        }
+    }
+
+    private sealed class EndpointTestContext(
+        TestLiveConfiguration<AudioEndpointSettings> endpointSettings) :
+        IPluginContext
+    {
+        public string PluginId => "audio-collector";
+        public IConfiguration Configuration { get; } =
+            new ConfigurationBuilder().Build();
+        public ILoggerFactory LoggerFactory => NullLoggerFactory.Instance;
+        public IPluginPublisher Publisher => throw new NotSupportedException();
+        public IPluginSubscriber Subscriber => throw new NotSupportedException();
+        public ILiveConfiguration<OutputInputProfile>? InputProfile => null;
+        public IPluginConfigurationEditor? ConfigurationEditor => null;
+
+        public ILiveConfiguration<TConfig> ObserveConfiguration<TConfig>(
+            Func<IConfiguration, TConfig> snapshotFactory,
+            Func<TConfig, ConfigurationValidationResult>? validator = null)
+            where TConfig : notnull
+        {
+            _ = snapshotFactory;
+            _ = validator;
+            return (ILiveConfiguration<TConfig>)(object)endpointSettings;
+        }
     }
 }

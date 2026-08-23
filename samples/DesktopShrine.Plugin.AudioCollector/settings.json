@@ -1,0 +1,14 @@
+{
+  "pluginId": "audio-collector",
+  "displayName": "Audio",
+  "description": "Audio capture and spectrum processing.",
+  "settings": [
+    { "id": "audio.capture-mode", "settingPath": "CaptureMode", "displayName": "Capture mode", "description": "Capture speaker output (loopback) or a recording input.", "category": "Source", "controlType": "Choice", "defaultValue": "loopback", "canAddToQuickAccess": true, "choices": [{"value":"loopback","displayName":"Playback / loopback"},{"value":"input","displayName":"Recording input"}] },
+    { "id": "audio.device", "settingPath": "Device", "displayName": "Audio source", "description": "The Windows audio endpoint used by the visualiser.", "category": "Source", "controlType": "Choice", "defaultValue": "default", "canAddToQuickAccess": true, "choiceProvider": "audio-devices" },
+    { "id": "audio.frames-per-second", "settingPath": "FramesPerSecond", "displayName": "Analysis rate *", "description": "Spectrum frames produced per second.", "category": "Processing", "controlType": "Number", "defaultValue": "50", "minimum": 1, "maximum": 240, "step": 1, "requiresRestart": true, "restartReason": "The capture worker timing is created when the plugin starts." },
+    { "id": "audio.fft-size", "settingPath": "FftSize", "displayName": "FFT size *", "description": "Frequency analysis resolution.", "category": "Processing", "controlType": "Choice", "defaultValue": "2048", "requiresRestart": true, "restartReason": "The FFT buffers are allocated during plugin initialisation.", "choices": [{"value":"512","displayName":"512"},{"value":"1024","displayName":"1024"},{"value":"2048","displayName":"2048"},{"value":"4096","displayName":"4096"},{"value":"8192","displayName":"8192"}] },
+    { "id": "audio.waveform-samples", "settingPath": "WaveformSamples", "displayName": "Waveform samples *", "description": "Number of samples retained for waveform output.", "category": "Processing", "controlType": "Number", "defaultValue": "160", "minimum": 2, "maximum": 16384, "step": 1, "requiresRestart": true, "restartReason": "The waveform buffers are allocated during plugin initialisation." },
+    { "id": "audio.device-poll", "settingPath": "DevicePollIntervalSeconds", "displayName": "Device poll interval *", "description": "Seconds between checks for endpoint changes.", "category": "Recovery", "controlType": "Number", "defaultValue": "2", "minimum": 1, "maximum": 60, "step": 1, "requiresRestart": true, "restartReason": "The recovery worker schedule is created when the plugin starts." },
+    { "id": "audio.status-interval", "settingPath": "StatusIntervalSeconds", "displayName": "Status log interval *", "description": "Seconds between capture status messages; zero disables them.", "category": "Diagnostics", "controlType": "Number", "defaultValue": "0", "minimum": 0, "maximum": 3600, "step": 1, "requiresRestart": true, "restartReason": "The status reporting schedule is created when the plugin starts." }
+  ]
+}

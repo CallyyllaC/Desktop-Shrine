@@ -69,9 +69,10 @@ internal sealed class AudioSpectrumRenderer
                 <= settings.SplitFrequencyHz
                 ? lowPeak
                 : highPeak;
-            var level = MathF.Pow(
-                Math.Clamp(driven[index] / Math.Max(reference, settings.Epsilon), 0, 1),
-                settings.Gamma);
+            var level = Math.Clamp(
+                driven[index] / Math.Max(reference, settings.Epsilon),
+                0,
+                1);
             EncodePixel(
                 output,
                 index,
@@ -141,7 +142,7 @@ internal sealed class AudioSpectrumRenderer
         float level)
     {
         var offset = index * 4;
-        var scale = level * settings.EffectiveBrightness;
+        var scale = level;
         if (colour.Red == colour.Green && colour.Green == colour.Blue)
         {
             output[offset + 3] = ToByte(

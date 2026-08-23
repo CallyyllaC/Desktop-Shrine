@@ -481,7 +481,19 @@ public sealed class ArtworkPaletteTests
             Func<IConfiguration, TConfig> snapshotFactory,
             Func<TConfig, ConfigurationValidationResult>? validator = null)
             where TConfig : notnull =>
-            throw new NotSupportedException();
+            new StaticLiveConfiguration<TConfig>(snapshotFactory(Configuration));
+    }
+
+    private sealed class StaticLiveConfiguration<TConfig>(TConfig current) :
+        ILiveConfiguration<TConfig>
+        where TConfig : notnull
+    {
+        public TConfig Current => current;
+        public event EventHandler<ConfigurationChangedEventArgs<TConfig>>? Changed
+        {
+            add { }
+            remove { }
+        }
     }
 
     private sealed class CapturingPublisher : IPluginPublisher

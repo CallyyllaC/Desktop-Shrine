@@ -24,6 +24,7 @@ public sealed class WindowsNowPlayingPlugin : IInputPlugin
     private GlobalSystemMediaTransportControlsSession? session;
     private MediaDetails media = new();
     private WindowsNowPlayingSettings settings = new();
+    private ILiveConfiguration<WindowsNowPlayingSettings>? liveSettings;
     private readonly object activityGate = new();
     private CancellationTokenSource? pausedTimeout;
     private bool pauseExpired;
@@ -75,8 +76,10 @@ public sealed class WindowsNowPlayingPlugin : IInputPlugin
         token.ThrowIfCancellationRequested();
         context = value;
         logger = value.LoggerFactory.CreateLogger<WindowsNowPlayingPlugin>();
-        settings = WindowsNowPlayingSettings.FromConfiguration(
-            value.Configuration);
+        liveSettings = value.ObserveConfiguration(
+            WindowsNowPlayingSettings.FromConfiguration);
+        settings = liveSettings.Current;
+        liveSettings.Changed += OnSettingsChanged;
         return ValueTask.CompletedTask;
     }
 
@@ -118,6 +121,8 @@ public sealed class WindowsNowPlayingPlugin : IInputPlugin
 
     public ValueTask DisposeAsync()
     {
+        if (liveSettings is not null)
+            liveSettings.Changed -= OnSettingsChanged;
         UnbindManager();
         BindSession(null);
         ResetActivity(
@@ -125,6 +130,17 @@ public sealed class WindowsNowPlayingPlugin : IInputPlugin
             forgetPlayback: true);
         stop?.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private void OnSettingsChanged(
+        object? sender,
+        ConfigurationChangedEventArgs<WindowsNowPlayingSettings> args)
+    {
+        // Artwork and timeline options are read for every refresh. The pause
+        // timer retains its current duration until the next state transition.
+        settings = args.Current;
+        refreshes.Writer.TryWrite(RefreshKind.All);
+        logger!.LogInformation("Windows media settings updated live");
     }
 
     private async Task RunAsync(CancellationToken token)

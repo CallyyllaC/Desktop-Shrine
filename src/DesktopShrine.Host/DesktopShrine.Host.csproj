@@ -3,6 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <ApplicationIcon>../../assets/DesktopShrine.ico</ApplicationIcon>
+    <UseWindowsForms>true</UseWindowsForms>
     <WindowsPluginTargetFramework>net10.0-windows10.0.19041.0</WindowsPluginTargetFramework>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
@@ -28,6 +30,7 @@
                        ../../samples/DesktopShrine.Plugin.SteamNowPlaying/DesktopShrine.Plugin.SteamNowPlaying.csproj;
                        ../../samples/DesktopShrine.Plugin.ArtworkPalette/DesktopShrine.Plugin.ArtworkPalette.csproj;
                        ../../samples/DesktopShrine.Plugin.BlinkStickBar/DesktopShrine.Plugin.BlinkStickBar.csproj;
+                       ../../samples/DesktopShrine.Plugin.TaskbarControls/DesktopShrine.Plugin.TaskbarControls.csproj;
                        ../../samples/DesktopShrine.Plugin.GOverlay/DesktopShrine.Plugin.GOverlay.csproj;
                        ../../samples/DesktopShrine.Plugin.ConsoleDisplay/DesktopShrine.Plugin.ConsoleDisplay.csproj"
              Targets="Build"
@@ -45,6 +48,7 @@
       <SteamNowPlayingFile Include="../../samples/DesktopShrine.Plugin.SteamNowPlaying/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
       <ArtworkPaletteFile Include="../../samples/DesktopShrine.Plugin.ArtworkPalette/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
       <BlinkStickBarFile Include="../../samples/DesktopShrine.Plugin.BlinkStickBar/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
+      <TaskbarControlsFile Include="../../samples/DesktopShrine.Plugin.TaskbarControls/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
       <GOverlayFile Include="../../samples/DesktopShrine.Plugin.GOverlay/bin/$(Configuration)/$(WindowsPluginTargetFramework)/**/*"/>
       <ConsoleDisplayFile Include="../../samples/DesktopShrine.Plugin.ConsoleDisplay/bin/$(Configuration)/net10.0/**/*"/>
     </ItemGroup>
@@ -56,6 +60,7 @@
                           $(OutDir)plugins/steam-now-playing;
                           $(OutDir)plugins/artwork-palette;
                           $(OutDir)plugins/blinkstick-bar;
+                          $(OutDir)plugins/taskbar-controls;
                           $(OutDir)plugins/goverlay;
                           $(OutDir)plugins/console-display"/>
     <Copy SourceFiles="@(DevelopmentContract)"
@@ -73,29 +78,40 @@
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.AudioCollector/plugin.json"
           DestinationFolder="$(OutDir)plugins/audio-collector"
           SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.AudioCollector/settings.json" DestinationFolder="$(OutDir)plugins/audio-collector" SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(WindowsNowPlayingFile)"
           DestinationFiles="@(WindowsNowPlayingFile->'$(OutDir)plugins/windows-now-playing/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"/>
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.WindowsNowPlaying/plugin.json"
           DestinationFolder="$(OutDir)plugins/windows-now-playing"
           SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.WindowsNowPlaying/settings.json" DestinationFolder="$(OutDir)plugins/windows-now-playing" SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(SteamNowPlayingFile)"
           DestinationFiles="@(SteamNowPlayingFile->'$(OutDir)plugins/steam-now-playing/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"/>
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.SteamNowPlaying/plugin.json"
           DestinationFolder="$(OutDir)plugins/steam-now-playing"
           SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.SteamNowPlaying/settings.json" DestinationFolder="$(OutDir)plugins/steam-now-playing" SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(ArtworkPaletteFile)"
           DestinationFiles="@(ArtworkPaletteFile->'$(OutDir)plugins/artwork-palette/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"/>
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.ArtworkPalette/plugin.json"
           DestinationFolder="$(OutDir)plugins/artwork-palette"
           SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.ArtworkPalette/settings.json" DestinationFolder="$(OutDir)plugins/artwork-palette" SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(BlinkStickBarFile)"
           DestinationFiles="@(BlinkStickBarFile->'$(OutDir)plugins/blinkstick-bar/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"/>
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.BlinkStickBar/plugin.json"
           DestinationFolder="$(OutDir)plugins/blinkstick-bar"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.BlinkStickBar/settings.json" DestinationFolder="$(OutDir)plugins/blinkstick-bar" SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="@(TaskbarControlsFile)"
+          DestinationFiles="@(TaskbarControlsFile->'$(OutDir)plugins/taskbar-controls/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.TaskbarControls/plugin.json"
+          DestinationFolder="$(OutDir)plugins/taskbar-controls"
           SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(GOverlayFile)"
           DestinationFiles="@(GOverlayFile->'$(OutDir)plugins/goverlay/%(RecursiveDir)%(Filename)%(Extension)')"
@@ -103,6 +119,7 @@
     <Copy SourceFiles="../../samples/DesktopShrine.Plugin.GOverlay/plugin.json"
           DestinationFolder="$(OutDir)plugins/goverlay"
           SkipUnchangedFiles="true"/>
+    <Copy SourceFiles="../../samples/DesktopShrine.Plugin.GOverlay/settings.json" DestinationFolder="$(OutDir)plugins/goverlay" SkipUnchangedFiles="true"/>
     <Copy SourceFiles="@(ConsoleDisplayFile)"
           DestinationFiles="@(ConsoleDisplayFile->'$(OutDir)plugins/console-display/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true"/>

@@ -1,14 +1,205 @@
+using DesktopShrine.Abstractions;
 using DesktopShrine.Contracts.Audio;
 using DesktopShrine.Contracts.Hardware;
 using DesktopShrine.Contracts.Media;
 using DesktopShrine.Plugin.BlinkStickBar;
+using DesktopShrine.Runtime;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace DesktopShrine.Integration.Tests;
 
 public sealed class BlinkStickBarTests
 {
+    [Fact]
+    public void DefaultsToFortyEightLeds()
+    {
+        var settings = BlinkStickBarSettings.FromConfiguration(
+            new ConfigurationBuilder().Build());
+
+        Assert.Equal(48, settings.LedCount);
+    }
+
+    [Fact]
+    public async Task JsonConfigurationReloadsWithoutRestartingPlugin()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"desktop-shrine-blinkstick-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var fileName = Path.Combine(directory, "blinkstick-bar.json");
+        await File.WriteAllTextAsync(
+            fileName,
+            """
+            {
+              "LedCount": 24,
+              "DataChannel": 0,
+              "ExternalPower": true,
+              "AnimationFramesPerSecond": 60
+            }
+            """,
+            TestContext.Current.CancellationToken);
+
+        var hardware = new RecordingBlinkStickHardware();
+        var plugin = new BlinkStickBarPlugin(() => hardware);
+        PluginContext? context = null;
+        var started = false;
+        try
+        {
+            var provider = new PluginConfigurationProvider(
+                new ConfigurationBuilder().Build(),
+                Options.Create(new DesktopShrineOptions
+                {
+                    PluginConfigurationDirectory = directory
+                }),
+                NullLogger<PluginConfigurationProvider>.Instance);
+            context = new PluginContext(
+                "blinkstick-bar",
+                provider.GetConfiguration("blinkstick-bar"),
+                NullLoggerFactory.Instance,
+                new NoOpPublisher(),
+                new NoOpSubscriber(),
+                inputProfile: null);
+
+            await plugin.InitialiseAsync(
+                context,
+                TestContext.Current.CancellationToken);
+            await plugin.StartAsync(TestContext.Current.CancellationToken);
+            started = true;
+            await WaitUntilAsync(
+                () => hardware.HasFrame(channel: 0, byteCount: 24 * 4));
+
+            var replacement = Path.Combine(directory, "replacement.json");
+            await File.WriteAllTextAsync(
+                replacement,
+                """
+                {
+                  "LedCount": 48,
+                  "DataChannel": 2,
+                  "ExternalPower": true,
+                  "AnimationFramesPerSecond": 60
+                }
+                """,
+                TestContext.Current.CancellationToken);
+            File.Move(replacement, fileName, overwrite: true);
+
+            await WaitUntilAsync(
+                () => hardware.HasFrame(channel: 2, byteCount: 48 * 4));
+            Assert.Equal(1, hardware.ConnectCount);
+        }
+        finally
+        {
+            if (started)
+                await plugin.StopAsync(CancellationToken.None);
+            await plugin.DisposeAsync();
+            context?.Dispose();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+        Assert.True(hardware.WasClearedBeforeDispose);
+    }
+
+    [Theory]
+    [InlineData(0.50f)]
+    [InlineData(0.25f)]
+    [InlineData(0.10f)]
+    public void BrightnessProportionallyScalesGammaShapedOutput(
+        float brightness)
+    {
+        float[] inputs = [0.05f, 0.10f, 0.25f, 0.50f, 0.75f, 1.00f];
+        var full = new LedOutputTransform(TestSettings(24) with
+        {
+            Gamma = 1.6f,
+            Brightness = 1
+        });
+        var scaled = new LedOutputTransform(TestSettings(24) with
+        {
+            Gamma = 1.6f,
+            Brightness = brightness
+        });
+
+        foreach (var input in inputs)
+        {
+            Assert.Equal(
+                full.ApplyNormalized(input) * brightness,
+                scaled.ApplyNormalized(input),
+                precision: 6);
+        }
+    }
+
+    [Fact]
+    public void BrightnessEndpointsAreZeroAndUnattenuated()
+    {
+        float[] inputs = [0.05f, 0.10f, 0.25f, 0.50f, 0.75f, 1.00f];
+        var off = new LedOutputTransform(TestSettings(24) with
+        {
+            Gamma = 1.6f,
+            Brightness = 0
+        });
+        var full = new LedOutputTransform(TestSettings(24) with
+        {
+            Gamma = 1.6f,
+            Brightness = 1
+        });
+
+        foreach (var input in inputs)
+        {
+            Assert.Equal(0, off.ApplyNormalized(input));
+            Assert.Equal(
+                MathF.Pow(input, 1.6f),
+                full.ApplyNormalized(input),
+                precision: 6);
+        }
+    }
+
+    [Fact]
+    public void OutputTransformKeepsBrightnessAndHardwareLimitSeparate()
+    {
+        byte[] effectFrame = [128, 128, 128, 128];
+        var settings = TestSettings(24) with
+        {
+            Gamma = 1,
+            Brightness = 0.5f,
+            ExternalPower = false,
+            UsbCurrentMa = 600,
+            PixelMaximumMa = 50
+        };
+
+        var output = new LedOutputTransform(settings).Apply(effectFrame);
+
+        Assert.Equal(0.5f, settings.Brightness);
+        Assert.Equal(0.5f, settings.HardwareOutputLimit);
+        Assert.All(output, value => Assert.InRange(value, (byte)31, (byte)33));
+    }
+
+    [Fact]
+    public void ObsoleteCompensationConfigurationIsIgnored()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["PerceptualCompensationEnabled"] = "true",
+                ["PerceptualCompensationStrength"] = "not-a-number",
+                ["PerceptualCompensationMinimum"] = "-100",
+                ["PerceptualCompensationMaximum"] = "100",
+                ["PerceptualCompensationSmoothingSeconds"] = "0",
+                ["PerceptualCompensationMinimumLuminance"] = "1"
+            })
+            .Build();
+
+        var settings = BlinkStickBarSettings.FromConfiguration(configuration);
+
+        Assert.True(BlinkStickBarSettings.Validate(settings).IsValid);
+        Assert.DoesNotContain(
+            settings.GetType().GetProperties(),
+            property => property.Name.StartsWith(
+                "PerceptualCompensation",
+                StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AudioSpectrumUsesWhiteChannelWithoutArtwork()
     {
@@ -315,6 +506,14 @@ public sealed class BlinkStickBarTests
         };
     }
 
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
+        while (!condition() && DateTimeOffset.UtcNow < deadline)
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        Assert.True(condition(), "The expected BlinkStick frame was not sent.");
+    }
+
     private static HardwareMonitorState State(
         DateTimeOffset capturedAt,
         double gpuLoad,
@@ -432,5 +631,133 @@ public sealed class BlinkStickBarTests
             + frame[offset + 1]
             + frame[offset + 2]
             + frame[offset + 3];
+    }
+
+    private sealed class RecordingBlinkStickHardware : IBlinkStickHardware
+    {
+        private readonly object gate = new();
+        private readonly List<SentFrame> frames = [];
+        private bool connected;
+        private int connectCount;
+        private bool wasClearedBeforeDispose;
+
+        public bool IsConnected
+        {
+            get
+            {
+                lock (gate)
+                    return connected;
+            }
+        }
+
+        public int ConnectCount
+        {
+            get
+            {
+                lock (gate)
+                    return connectCount;
+            }
+        }
+
+        public bool WasClearedBeforeDispose
+        {
+            get
+            {
+                lock (gate)
+                    return wasClearedBeforeDispose;
+            }
+        }
+
+        public bool Connect()
+        {
+            lock (gate)
+            {
+                connected = true;
+                connectCount++;
+                return true;
+            }
+        }
+
+        public void Send(byte channel, byte[] grbwFrame)
+        {
+            lock (gate)
+            {
+                if (!connected)
+                    throw new InvalidOperationException("The test BlinkStick is disconnected.");
+                frames.Add(new(
+                    channel,
+                    grbwFrame.Length,
+                    grbwFrame.Any(value => value > 0)));
+            }
+        }
+
+        public void TurnOff(byte channel, int byteCount) =>
+            Send(channel, new byte[byteCount]);
+
+        public bool HasFrame(byte channel, int byteCount)
+        {
+            lock (gate)
+            {
+                return frames.Any(frame =>
+                    frame.Channel == channel
+                    && frame.ByteCount == byteCount);
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                wasClearedBeforeDispose = frames.LastOrDefault()?.IsLit == false;
+                connected = false;
+            }
+        }
+
+        private sealed record SentFrame(
+            byte Channel,
+            int ByteCount,
+            bool IsLit);
+    }
+
+    private sealed class NoOpPublisher : IPluginPublisher
+    {
+        public ValueTask PublishAsync<T>(
+            string providedPortId,
+            T payload,
+            CancellationToken cancellationToken = default)
+            where T : IShrineMessage => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoOpSubscriber : IPluginSubscriber
+    {
+        private readonly NoOpRouteMonitor route = new();
+
+        public IAsyncDisposable Subscribe<T>(
+            string requiredPortId,
+            Func<MessageEnvelope<T>, CancellationToken, ValueTask> handler)
+            where T : IShrineMessage => new NoOpSubscription();
+
+        public IInputRouteMonitor ObserveRoute(string requiredPortId) => route;
+    }
+
+    private sealed class NoOpRouteMonitor : IInputRouteMonitor
+    {
+        public InputRouteSnapshot Current { get; } = new()
+        {
+            Consumer = new("blinkstick-bar", "media"),
+            IsExclusive = true,
+            Providers = []
+        };
+
+        public event EventHandler<ConfigurationChangedEventArgs<InputRouteSnapshot>>? Changed
+        {
+            add { }
+            remove { }
+        }
+    }
+
+    private sealed class NoOpSubscription : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?$')]
-    [string]$Version = '1.1.0',
+    [string]$Version = '2.0.0',
+
+    [ValidateSet('Alpha', 'Beta', 'Stable')]
+    [string]$ReleaseChannel = 'Alpha',
 
     [ValidateSet('win-x64')]
     [string]$RuntimeIdentifier = 'win-x64',
@@ -13,6 +16,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+$parsedVersion = [Version]$Version
+$displayVersion = if ($ReleaseChannel -eq 'Stable') {
+    $Version
+} else {
+    "$($parsedVersion.Major).$($parsedVersion.Minor) $ReleaseChannel"
+}
+$artifactVersion = if ($ReleaseChannel -eq 'Stable') {
+    $Version
+} else {
+    "$Version-$($ReleaseChannel.ToLowerInvariant())"
+}
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $artifactsRoot = Join-Path $repositoryRoot 'artifacts\installer'
@@ -102,6 +117,7 @@ function Copy-PluginPublish {
         --self-contained false `
         --output $temporaryOutput `
         "-p:Version=$Version" `
+        "-p:InformationalVersion=$artifactVersion" `
         '-p:DebugSymbols=false' `
         '-p:DebugType=None'
 
@@ -112,6 +128,15 @@ function Copy-PluginPublish {
     Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $projectPath) 'plugin.json') `
         -Destination $destination `
         -Force
+    $settingsMetadata = Join-Path (Split-Path -Parent $projectPath) 'settings.json'
+    if (Test-Path -LiteralPath $settingsMetadata) {
+        Copy-Item -LiteralPath $settingsMetadata -Destination $destination -Force
+    }
+
+    $stagedHost = Join-Path $publishRoot 'DesktopShrine.Host.exe'
+    if (-not (Test-Path -LiteralPath $stagedHost)) {
+        throw "Publishing plugin $Id unexpectedly removed the staged host at $stagedHost."
+    }
 }
 
 Assert-Toolchain
@@ -131,6 +156,7 @@ Invoke-DotNet publish $hostProject `
     --self-contained true `
     --output $publishRoot `
     "-p:Version=$Version" `
+    "-p:InformationalVersion=$artifactVersion" `
     '-p:PublishSingleFile=false' `
     '-p:PublishTrimmed=false' `
     '-p:StageDevelopmentPlugins=false' `
@@ -154,6 +180,7 @@ foreach ($contractProject in $contractProjects) {
     Invoke-DotNet build $contractPath `
         --configuration Release `
         "-p:Version=$Version" `
+        "-p:InformationalVersion=$artifactVersion" `
         '-p:DebugSymbols=false' `
         '-p:DebugType=None'
     $contractName = [IO.Path]::GetFileNameWithoutExtension($contractPath)
@@ -170,16 +197,32 @@ $plugins = @(
     @{ Project = 'samples\DesktopShrine.Plugin.SteamNowPlaying\DesktopShrine.Plugin.SteamNowPlaying.csproj'; Id = 'steam-now-playing' },
     @{ Project = 'samples\DesktopShrine.Plugin.ArtworkPalette\DesktopShrine.Plugin.ArtworkPalette.csproj'; Id = 'artwork-palette' },
     @{ Project = 'samples\DesktopShrine.Plugin.BlinkStickBar\DesktopShrine.Plugin.BlinkStickBar.csproj'; Id = 'blinkstick-bar' },
+    @{ Project = 'samples\DesktopShrine.Plugin.TaskbarControls\DesktopShrine.Plugin.TaskbarControls.csproj'; Id = 'taskbar-controls' },
     @{ Project = 'samples\DesktopShrine.Plugin.GOverlay\DesktopShrine.Plugin.GOverlay.csproj'; Id = 'goverlay' }
 )
 foreach ($plugin in $plugins) {
     Copy-PluginPublish -Project $plugin.Project -Id $plugin.Id
 }
 
+$requiredPublishFiles = @(
+    (Join-Path $publishRoot 'DesktopShrine.Host.exe'),
+    (Join-Path $publishRoot 'System.Windows.Forms.dll'),
+    (Join-Path $publishRoot 'plugins\taskbar-controls\DesktopShrine.Plugin.TaskbarControls.dll'),
+    (Join-Path $publishRoot 'plugins\taskbar-controls\plugin.json'),
+    (Join-Path $publishRoot 'plugins\blinkstick-bar\settings.json'),
+    (Join-Path $publishRoot 'plugins\audio-collector\settings.json')
+)
+foreach ($requiredPublishFile in $requiredPublishFiles) {
+    if (-not (Test-Path -LiteralPath $requiredPublishFile)) {
+        throw "Required installer payload was not staged: $requiredPublishFile"
+    }
+}
+
 $legacyProject = Join-Path $repositoryRoot 'samples\DesktopShrine.Plugin.GOverlay\LegacySdk\DesktopShrine.Plugin.GOverlay.LegacySdk.csproj'
 Invoke-DotNet build $legacyProject `
     --configuration Release `
     "-p:Version=$Version" `
+    "-p:InformationalVersion=$artifactVersion" `
     "-p:GOverlayInstallDirectory=$GOverlayInstallDirectory" `
     '-p:DeployGOverlayPlugin=false' `
     '-p:DebugSymbols=false' `
@@ -203,6 +246,8 @@ Copy-Item -LiteralPath (Join-Path (Split-Path -Parent $legacyProject) 'Deploy-GO
 
 & $innoCompiler `
     "/DMyAppVersion=$Version" `
+    "/DMyAppDisplayVersion=$displayVersion" `
+    "/DMyAppArtifactVersion=$artifactVersion" `
     "/DPublishRoot=$publishRoot" `
     "/DRepositoryRoot=$repositoryRoot" `
     "/DInstallerOutput=$outputRoot" `
@@ -211,7 +256,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE."
 }
 
-$installerPath = Join-Path $outputRoot "DesktopShrine-Setup-$Version-$RuntimeIdentifier.exe"
+$installerPath = Join-Path $outputRoot "DesktopShrine-Setup-$artifactVersion-$RuntimeIdentifier.exe"
 if (-not (Test-Path -LiteralPath $installerPath)) {
     throw "The expected installer was not created at $installerPath."
 }

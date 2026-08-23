@@ -13,6 +13,7 @@ public sealed class ArtworkPalettePlugin : IInputPlugin, IOutputPlugin
     private ILogger<ArtworkPalettePlugin>? logger;
     private IAsyncDisposable? subscription;
     private ArtworkPaletteSettings settings = new();
+    private ILiveConfiguration<ArtworkPaletteSettings>? liveSettings;
     private byte[]? lastArtworkHash;
     private bool hasPublishedPaletteState;
     private bool paletteIsAvailable;
@@ -53,7 +54,10 @@ public sealed class ArtworkPalettePlugin : IInputPlugin, IOutputPlugin
         token.ThrowIfCancellationRequested();
         context = value;
         logger = value.LoggerFactory.CreateLogger<ArtworkPalettePlugin>();
-        settings = ArtworkPaletteSettings.FromConfiguration(value.Configuration);
+        liveSettings = value.ObserveConfiguration(
+            ArtworkPaletteSettings.FromConfiguration);
+        settings = liveSettings.Current;
+        liveSettings.Changed += OnSettingsChanged;
         subscription = value.Subscriber.Subscribe<NowPlayingState>(InputPortId, ProcessArtworkAsync);
         return ValueTask.CompletedTask;
     }
@@ -68,8 +72,19 @@ public sealed class ArtworkPalettePlugin : IInputPlugin, IOutputPlugin
 
     public async ValueTask DisposeAsync()
     {
+        if (liveSettings is not null)
+            liveSettings.Changed -= OnSettingsChanged;
         if (subscription is not null)
             await subscription.DisposeAsync();
+    }
+
+    private void OnSettingsChanged(
+        object? sender,
+        ConfigurationChangedEventArgs<ArtworkPaletteSettings> args)
+    {
+        settings = args.Current;
+        lastArtworkHash = null;
+        logger!.LogInformation("Artwork palette settings updated live");
     }
 
     private async ValueTask ProcessArtworkAsync(MessageEnvelope<NowPlayingState> envelope, CancellationToken token)

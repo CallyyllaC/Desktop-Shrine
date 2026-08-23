@@ -77,10 +77,17 @@ internal sealed record BlinkStickBarSettings
         }
     }
 
+    public float HardwareOutputLimit => ExternalPower
+        ? 1f
+        : (float)Math.Clamp(
+            UsbCurrentMa / (LedCount * PixelMaximumMa),
+            0.01d,
+            1d);
+
     public static BlinkStickBarSettings FromConfiguration(
         IConfiguration configuration) => new()
     {
-        LedCount = ReadInteger(configuration, "LedCount", 24),
+        LedCount = ReadInteger(configuration, "LedCount", 48),
         DataChannel = ReadInteger(configuration, "DataChannel", 0),
         UsbCurrentMa = ReadDouble(configuration, "UsbCurrentMa", 400),
         PixelMaximumMa = ReadDouble(configuration, "PixelMaximumMa", 50),
@@ -102,7 +109,7 @@ internal sealed record BlinkStickBarSettings
         Release = ReadFloat(configuration, "Release", 0.9f),
         PeakRise = ReadFloat(configuration, "PeakRise", 0.35f),
         PeakDecay = ReadFloat(configuration, "PeakDecay", 0.995f),
-        Gamma = ReadFloat(configuration, "Gamma", 0.7f),
+        Gamma = ReadFloat(configuration, "Gamma", 2.2f),
         HardwareGamma = ReadFloat(
             configuration,
             "HardwareGamma",

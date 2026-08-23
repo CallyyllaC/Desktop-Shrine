@@ -1,0 +1,12 @@
+{
+  "pluginId": "artwork-palette", "displayName": "Artwork Palette", "description": "Colour extraction from currently playing artwork.",
+  "settings": [
+    {"id":"artwork.alpha-threshold","settingPath":"AlphaThreshold","displayName":"Alpha threshold","category":"Analysis","controlType":"Number","defaultValue":"24","minimum":0,"maximum":255,"step":1},
+    {"id":"artwork.max-dimension","settingPath":"MaximumAnalysisDimension","displayName":"Maximum analysis size","category":"Analysis","controlType":"Number","defaultValue":"128","minimum":32,"maximum":1024,"step":1},
+    {"id":"artwork.border-percent","settingPath":"BorderPercent","displayName":"Border sample width","category":"Analysis","controlType":"Slider","defaultValue":"0.05","minimum":0,"maximum":0.5,"step":0.01,"format":"percent"},
+    {"id":"artwork.border-weight","settingPath":"BorderWeight","displayName":"Border weighting","category":"Analysis","controlType":"Slider","defaultValue":"0.15","minimum":0,"maximum":1,"step":0.01,"format":"percent"},
+    {"id":"artwork.max-accent-lightness","settingPath":"MaximumAccentLightness","displayName":"Maximum accent lightness","category":"Colour selection","controlType":"Slider","defaultValue":"0.72","minimum":0,"maximum":1,"step":0.01,"format":"percent"},
+    {"id":"artwork.distinct-distance","settingPath":"MinimumDistinctAccentDistance","displayName":"Minimum colour distance","category":"Colour selection","controlType":"Number","defaultValue":"0.035","minimum":0,"maximum":1,"step":0.001},
+    {"id":"artwork.min-alpha","settingPath":"MinimumAccentAverageAlpha","displayName":"Minimum average alpha","category":"Colour selection","controlType":"Slider","defaultValue":"0.25","minimum":0,"maximum":1,"step":0.01,"format":"percent"}
+  ]
+}
