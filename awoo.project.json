@@ -1,6 +1,6 @@
 {
   "name": "Desktop Shrine",
-  "summary": "A modular Windows desktop runtime that turns system, media, and hardware activity into ambient visual output.",
+  "summary": "A Windows-tailored port of the Ember Deck’s visualiser, with extra steps.",
   "status": "maintained",
   "type": "software-hardware",
   "tags": [
