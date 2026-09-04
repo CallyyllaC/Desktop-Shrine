@@ -4,10 +4,9 @@
   "status": "maintained",
   "type": "software-hardware",
   "tags": [
-    ".NET",
+    "Desktop App",
     "Windows",
-    "Hardware",
-    "Visualisation"
+    "Peripheral"
   ],
   "image": "images/ConfigUI.png",
   "content": "docs/awoo.md"
