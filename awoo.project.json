@@ -1,0 +1,12 @@
+{
+  "name": "Desktop Shrine",
+  "summary": "A modular Windows desktop runtime that turns system, media, and hardware activity into ambient visual output.",
+  "status": "maintained",
+  "type": "software-hardware",
+  "tags": [
+    ".NET",
+    "Windows",
+    "Hardware",
+    "Visualisation"
+  ]
+}
