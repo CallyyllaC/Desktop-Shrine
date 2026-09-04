@@ -9,5 +9,6 @@
     "Hardware",
     "Visualisation"
   ],
-  "image": "images/HardwareTelemetry.png"
+  "image": "images/ConfigUI.png",
+  "content": "docs/awoo.md"
 }
