@@ -9,5 +9,8 @@
     "Peripheral"
   ],
   "image": "images/ConfigUI.png",
-  "content": "docs/awoo.md"
+  "content": "docs/awoo.md",
+  "licence": "MIT License",
+  "licenceLink": "https://github.com/CallyyllaC/Desktop-Shrine/blob/master/LICENSE",
+  "licenceLinkText": "View MIT License ↗"
 }
