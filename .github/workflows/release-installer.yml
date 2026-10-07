@@ -32,8 +32,10 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $candidates = @('VERSION', 'version-number', 'version-number.txt') |
-            Where-Object { Test-Path -LiteralPath $_ }
+          $candidates = @(
+            @('VERSION', 'version-number', 'version-number.txt') |
+              Where-Object { Test-Path -LiteralPath $_ }
+          )
 
           if ($candidates.Count -eq 0) {
             throw 'No release version file was found. Expected VERSION, version-number, or version-number.txt.'
