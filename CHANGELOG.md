@@ -6,6 +6,11 @@ pushed as GitHub releases when `2.0.0-alpha` was prepared.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.1] - 2026-08-22 — Current unreleased build
+
+### Changed
+- Updated Licences
+  
 ## [2.0.0-alpha] - 2026-08-22 — Current unreleased build
 
 ### Changed

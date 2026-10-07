@@ -252,6 +252,10 @@ The architecture follows a ports-and-adapters approach: plugins communicate thro
 
 ## Licence
 
-Desktop Shrine is licensed under the [MIT License](LICENSE).
+Desktop Shrine is licensed under [Awoo Licence v2.0](https://awoo.ltd/licence/).
+The complete licence text is included in [`LICENSE`](LICENSE).
 
-Third-party components and assets retain their respective licences; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for details.
+Third-party components and assets retain their respective licences; see
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md),
+[`third-party-licenses/`](third-party-licenses/), and
+[`AWOO-ASSETS-DEFINITION.md`](AWOO-ASSETS-DEFINITION.md) for details.

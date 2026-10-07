@@ -82,6 +82,33 @@ function Assert-Toolchain {
     }
 }
 
+function Copy-DotNetLicenceFiles {
+    $dotnetCommand = Get-Command 'dotnet' -ErrorAction Stop
+    $dotnetRoot = Split-Path -Parent $dotnetCommand.Source
+    $destination = Join-Path $publishRoot 'licenses\third-party-licenses'
+    $licenceFiles = @(
+        @{
+            Source = Join-Path $dotnetRoot 'LICENSE.txt'
+            Name = 'DotNet-LICENSE.txt'
+        },
+        @{
+            Source = Join-Path $dotnetRoot 'ThirdPartyNotices.txt'
+            Name = 'DotNet-THIRD-PARTY-NOTICES.txt'
+        }
+    )
+
+    New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    foreach ($licenceFile in $licenceFiles) {
+        if (-not (Test-Path -LiteralPath $licenceFile.Source)) {
+            throw "Required .NET licence file was not found: $($licenceFile.Source)"
+        }
+
+        Copy-Item -LiteralPath $licenceFile.Source `
+            -Destination (Join-Path $destination $licenceFile.Name) `
+            -Force
+    }
+}
+
 function Reset-Directory {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -163,6 +190,8 @@ Invoke-DotNet publish $hostProject `
     '-p:DebugSymbols=false' `
     '-p:DebugType=None'
 
+Copy-DotNetLicenceFiles
+
 $consoleConfiguration = Join-Path $publishRoot 'configuration\plugins\console-display.json'
 if (Test-Path -LiteralPath $consoleConfiguration) {
     Remove-Item -LiteralPath $consoleConfiguration -Force
@@ -210,7 +239,9 @@ $requiredPublishFiles = @(
     (Join-Path $publishRoot 'plugins\taskbar-controls\DesktopShrine.Plugin.TaskbarControls.dll'),
     (Join-Path $publishRoot 'plugins\taskbar-controls\plugin.json'),
     (Join-Path $publishRoot 'plugins\blinkstick-bar\settings.json'),
-    (Join-Path $publishRoot 'plugins\audio-collector\settings.json')
+    (Join-Path $publishRoot 'plugins\audio-collector\settings.json'),
+    (Join-Path $publishRoot 'licenses\third-party-licenses\DotNet-LICENSE.txt'),
+    (Join-Path $publishRoot 'licenses\third-party-licenses\DotNet-THIRD-PARTY-NOTICES.txt')
 )
 foreach ($requiredPublishFile in $requiredPublishFiles) {
     if (-not (Test-Path -LiteralPath $requiredPublishFile)) {

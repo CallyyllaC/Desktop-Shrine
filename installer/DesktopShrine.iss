@@ -61,7 +61,8 @@ Source: "{#PublishRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdir
 Source: "{#RepositoryRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepositoryRoot}\CHANGELOG.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepositoryRoot}\THIRD-PARTY-NOTICES.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
-Source: "{#RepositoryRoot}\third-party-licenses\Oxanium-OFL-1.1.txt"; DestDir: "{app}\licenses\third-party-licenses"; Flags: ignoreversion
+Source: "{#RepositoryRoot}\AWOO-ASSETS-DEFINITION.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepositoryRoot}\third-party-licenses\*"; DestDir: "{app}\licenses\third-party-licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Desktop Shrine"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--launch"; WorkingDir: "{app}"

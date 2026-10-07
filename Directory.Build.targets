@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <Authors>CallyyllaC</Authors>
+    <Copyright>Copyright © 2026 CallyyllaC</Copyright>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/CallyyllaC/Desktop-Shrine</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/CallyyllaC/Desktop-Shrine.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)LICENSE"
+          Pack="true"
+          PackagePath=""
+          Visible="false" />
+  </ItemGroup>
+</Project>

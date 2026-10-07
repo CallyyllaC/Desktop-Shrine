@@ -71,8 +71,8 @@ property of their respective owner. No ownership, endorsement, or affiliation
 is claimed.
 
 The Desktop Shrine GOverlay bridge and plugin are separate integration
-components developed as part of this repository under the project's MIT
-licence. They allow Desktop Shrine to communicate with the third-party
+components developed as part of this repository under Awoo Licence v2.0.
+They allow Desktop Shrine to communicate with the third-party
 GOverlay application; they are not the GOverlay application or installer. See
 the complete [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md).
 
