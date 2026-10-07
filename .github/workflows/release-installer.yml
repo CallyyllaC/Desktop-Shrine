@@ -1,0 +1,197 @@
+name: Release Windows installer
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - VERSION
+      - version-number
+      - version-number.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-shrine-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read release version
+        id: version
+        shell: pwsh
+        run: |
+          $candidates = @('VERSION', 'version-number', 'version-number.txt') |
+            Where-Object { Test-Path -LiteralPath $_ }
+
+          if ($candidates.Count -eq 0) {
+            throw 'No release version file was found. Expected VERSION, version-number, or version-number.txt.'
+          }
+
+          if ($candidates.Count -gt 1) {
+            throw "Multiple release version files were found: $($candidates -join ', '). Keep exactly one."
+          }
+
+          $versionFile = $candidates[0]
+          $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') {
+            throw "Invalid release version '$version' in $versionFile. Expected a numeric version such as 2.0.0."
+          }
+
+          $tag = "v$version-alpha"
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "file=$versionFile" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Release version: $version"
+          Write-Host "Release tag:     $tag"
+          Write-Host "Version source:  $versionFile"
+
+      - name: Ensure release tag does not already exist
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $existing = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($existing) {
+            throw "Tag $env:RELEASE_TAG already exists. Increment the release version before publishing again."
+          }
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: |
+          $knownPaths = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:LocalAppData\Programs\Inno Setup 6\ISCC.exe"
+          )
+
+          if (-not ($knownPaths | Where-Object { Test-Path -LiteralPath $_ })) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) {
+              throw "Chocolatey failed to install Inno Setup (exit code $LASTEXITCODE)."
+            }
+          }
+
+          $compiler = $knownPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $compiler) {
+            throw 'Inno Setup 6 was not found after installation.'
+          }
+
+          Write-Host "Using Inno Setup: $compiler"
+
+      - name: Install official GOverlay build dependency
+        id: goverlay
+        shell: pwsh
+        run: |
+          $iss = Get-Content -LiteralPath 'installer\DesktopShrine.iss' -Raw
+
+          $uriMatch = [regex]::Match($iss, '#define\s+GOverlayMsiUri\s+"([^"]+)"')
+          $hashMatch = [regex]::Match($iss, '#define\s+GOverlayMsiSha256\s+"([A-Fa-f0-9]{64})"')
+
+          if (-not $uriMatch.Success -or -not $hashMatch.Success) {
+            throw 'Could not read the pinned GOverlay MSI URI/hash from installer\DesktopShrine.iss.'
+          }
+
+          $uri = $uriMatch.Groups[1].Value
+          $expectedHash = $hashMatch.Groups[1].Value.ToUpperInvariant()
+          $msi = Join-Path $env:RUNNER_TEMP 'GOverlaySetup.msi'
+
+          Write-Host "Downloading pinned GOverlay MSI from $uri"
+          Invoke-WebRequest -Uri $uri -OutFile $msi
+
+          $actualHash = (Get-FileHash -LiteralPath $msi -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "GOverlay MSI SHA-256 mismatch. Expected $expectedHash, got $actualHash."
+          }
+
+          $arguments = "/i `"$msi`" /qn /norestart"
+          $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 3010)) {
+            throw "GOverlay MSI installation failed with exit code $($process.ExitCode)."
+          }
+
+          $goverlayDirectory = Join-Path ${env:ProgramFiles(x86)} 'GOverlay'
+          $interfaces = Join-Path $goverlayDirectory 'Interfaces.dll'
+          if (-not (Test-Path -LiteralPath $interfaces)) {
+            throw "GOverlay installed, but Interfaces.dll was not found at $interfaces."
+          }
+
+          "directory=$goverlayDirectory" >> $env:GITHUB_OUTPUT
+          Write-Host "GOverlay SDK dependency ready at $goverlayDirectory"
+
+      - name: Build and test installer
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          GOVERLAY_DIRECTORY: ${{ steps.goverlay.outputs.directory }}
+        run: |
+          .\scripts\Build-WindowsInstaller.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -ReleaseChannel Alpha `
+            -GOverlayInstallDirectory $env:GOVERLAY_DIRECTORY
+
+      - name: Verify release artifacts
+        id: artifacts
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath 'artifacts\installer\output' -Filter 'DesktopShrine-Setup-*.exe' -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one installer, found $($installers.Count)."
+          }
+
+          $installer = $installers[0]
+          $checksum = "$($installer.FullName).sha256"
+
+          if (-not (Test-Path -LiteralPath $checksum)) {
+            throw "Installer checksum file was not created: $checksum"
+          }
+
+          "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Installer: $($installer.FullName)"
+          Write-Host "Checksum:  $checksum"
+
+      - name: Preserve build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-shrine-${{ steps.version.outputs.version }}-alpha
+          path: |
+            ${{ steps.artifacts.outputs.installer }}
+            ${{ steps.artifacts.outputs.checksum }}
+          if-no-files-found: error
+
+      - name: Create GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          INSTALLER_PATH: ${{ steps.artifacts.outputs.installer }}
+          CHECKSUM_PATH: ${{ steps.artifacts.outputs.checksum }}
+        run: |
+          gh release create $env:RELEASE_TAG `
+            $env:INSTALLER_PATH `
+            $env:CHECKSUM_PATH `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:GITHUB_SHA `
+            --title "Desktop Shrine $env:RELEASE_TAG" `
+            --generate-notes `
+            --prerelease
